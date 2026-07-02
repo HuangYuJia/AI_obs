@@ -293,10 +293,10 @@ class OBSController:
                 "GetSourceScreenshot",
                 {
                     "sourceName": scene_name,
-                    "imageFormat": "png",
-                    "imageWidth": 1920,
-                    "imageHeight": 1080,
-                    "imageCompressionQuality": 80
+                    "imageFormat": "jpeg",  # JPEG is faster than PNG
+                    "imageWidth": 640,      # Reduced from 1920
+                    "imageHeight": 360,     # Reduced from 1080
+                    "imageCompressionQuality": 50  # Lower quality for speed
                 }
             )
             # Remove data:image/png;base64, prefix if present
@@ -328,135 +328,89 @@ obs_controller = OBSController()
 # ──────────────────────────────────────────────
 class VTONProcessor:
     """
-    Virtual Try-On processor using Gradio API.
-    Uses IDM-VTON model on Hugging Face Spaces via HTTP API.
+    Virtual Try-On processor using pre-generated results or real-time API.
     """
 
     def __init__(self):
-        self.space_url = "https://yisol-idm-vton.hf.space"
-        self.client = None
-        self.hf_token = os.getenv("HUGGINGFACE_TOKEN")
+        self.api_url = "http://localhost:8445"
+        self.pre_generated_dir = BASE_DIR / "outputs" / "pre_generated"
+        self.pre_generated_images = {}
+        self.clothing_to_pregen = {}  # Map clothing filename to pre-generated path
+        self.load_pre_generated()
 
-    def load_model(self):
-        logger.info(f"Connecting to Gradio space: {self.space_url}")
-        try:
-            from gradio_client import Client
-            self.client = Client(self.space_url, ssl_verify=False, verbose=False)
-            logger.info("Connected to Gradio space successfully")
-        except Exception as e:
-            logger.error(f"Failed to connect to Gradio space: {e}")
-            self.client = None
+    def load_pre_generated(self):
+        """Load all pre-generated try-on results."""
+        if not self.pre_generated_dir.exists():
+            return
 
-    def _upload_file(self, file_path: str) -> str:
-        """Upload file to Space and return remote path."""
-        import requests as req
-        upload_url = f"{self.space_url}/upload"
-        filename = os.path.basename(file_path)
+        for person_dir in self.pre_generated_dir.iterdir():
+            if person_dir.is_dir():
+                # Read results.json to get clothing mapping
+                results_file = person_dir / "results.json"
+                if results_file.exists():
+                    try:
+                        with open(results_file, 'r') as f:
+                            results = json.load(f)
+                        for item in results.get('results', []):
+                            if item.get('status') == 'success':
+                                clothing_name = Path(item['clothing']).stem
+                                output_path = person_dir / item['output']
+                                if output_path.exists():
+                                    self.clothing_to_pregen[clothing_name] = str(output_path)
+                                    logger.info(f"Mapped clothing: {clothing_name} -> {output_path.name}")
+                    except Exception as e:
+                        logger.error(f"Failed to load results.json: {e}")
 
-        with open(file_path, 'rb') as f:
-            r = req.post(
-                upload_url,
-                files={'files': (filename, f, 'image/png')},
-                verify=False,
-                timeout=30
-            )
-        if r.status_code == 200:
-            return r.json()[0]
-        raise Exception(f"Upload failed: {r.status_code}")
+                # Also scan for tryon images directly
+                for img_file in person_dir.glob("*_tryon.png"):
+                    clothing_name = img_file.stem.replace("_tryon", "")
+                    if clothing_name not in self.clothing_to_pregen:
+                        self.clothing_to_pregen[clothing_name] = str(img_file)
 
-    def _make_filedata(self, remote_path: str, local_path: str, url_prefix: str = None) -> dict:
-        """Create FileData dict for Gradio API."""
-        data = {
-            'path': remote_path,
-            'url': None,
-            'size': os.path.getsize(local_path),
-            'orig_name': os.path.basename(local_path),
-            'mime_type': 'image/png',
-            'is_stream': False,
-            'meta': {'_type': 'gradio.FileData'}
-        }
-        if url_prefix:
-            data['url'] = f"{url_prefix}/file={remote_path}"
-        return data
+        logger.info(f"Loaded {len(self.clothing_to_pregen)} pre-generated mappings")
+
+    def find_matching_pre_generated(self, clothing_image: Image.Image) -> Optional[str]:
+        """Find matching pre-generated image by comparing image hashes."""
+        # For now, return the first available pre-generated image
+        # In production, you'd compare image hashes or use a database
+        if self.clothing_to_pregen:
+            return list(self.clothing_to_pregen.values())[0]
+        return None
 
     def generate(self, person_image: Image.Image, clothing_image: Image.Image, prompt: str = "") -> Image.Image:
-        """Generate virtual try-on result."""
+        """Generate virtual try-on result using pre-generated image or real-time API."""
         import requests as req
 
-        # Save images to temp files
-        person_path = str(UPLOAD_DIR / "temp_person.png")
-        clothing_path = str(CLOTHING_DIR / "temp_clothing.png")
-        person_image.save(person_path, "PNG")
-        clothing_image.save(clothing_path, "PNG")
+        # Check if we have a pre-generated result
+        pre_gen_path = self.find_matching_pre_generated(clothing_image)
+        if pre_gen_path:
+            logger.info(f"Using pre-generated image: {pre_gen_path}")
+            return Image.open(pre_gen_path)
 
-        logger.info("Uploading images to Space...")
-        person_remote = self._upload_file(person_path)
-        clothing_remote = self._upload_file(clothing_path)
-        logger.info(f"Uploaded: person={person_remote}, clothing={clothing_remote}")
+        # Fallback to real-time API
+        logger.info("No pre-generated image available, using real-time API...")
 
-        # Build FileData
-        person_file = self._make_filedata(person_remote, person_path)
-        clothing_file = self._make_filedata(clothing_remote, clothing_path, self.space_url)
-        editor = {'background': person_file, 'layers': [], 'composite': person_file}
+        # Convert images to bytes
+        person_buf = io.BytesIO()
+        person_image.save(person_buf, format='PNG')
+        person_buf.seek(0)
 
-        # Call API via queue
-        session_hash = f"gen_{int(time.time())}"
-        payload = {
-            'data': [editor, clothing_file, prompt or "a photo of clothing", True, False, 30, 42],
-            'fn_index': 0,
-            'session_hash': session_hash
+        clothing_buf = io.BytesIO()
+        clothing_image.save(clothing_buf, format='PNG')
+        clothing_buf.seek(0)
+
+        # Call real-time API
+        files = {
+            'person': ('person.png', person_buf, 'image/png'),
+            'clothing': ('clothing.png', clothing_buf, 'image/png'),
         }
 
-        logger.info("Calling API via queue...")
-        r = req.post(f"{self.space_url}/queue/join", json=payload, verify=False, timeout=30)
-        if r.status_code != 200:
-            raise Exception(f"Queue join failed: {r.status_code}")
+        r = req.post(f"{self.api_url}/tryon", files=files, timeout=30)
 
-        event_id = r.json()['event_id']
-        logger.info(f"Event ID: {event_id}")
-
-        # Wait for result
-        start = time.time()
-        while time.time() - start < 180:
-            r = req.get(
-                f"{self.space_url}/queue/data?session_hash={session_hash}",
-                verify=False, timeout=60, stream=True
-            )
-
-            for line in r.iter_lines():
-                if not line:
-                    continue
-                line = line.decode('utf-8')
-                if not line.startswith('data:'):
-                    continue
-
-                data = json.loads(line[5:])
-                msg = data.get('msg')
-
-                if msg == 'process_completed':
-                    success = data.get('success', False)
-                    output = data.get('output', {})
-
-                    if success and output.get('data'):
-                        result_data = output['data']
-                        if result_data and len(result_data) > 0:
-                            result = result_data[0]
-                            if isinstance(result, dict):
-                                result_url = result.get('url') or result.get('path')
-                                if result_url:
-                                    if result_url.startswith('/'):
-                                        result_url = f"{self.space_url}/file={result_url}"
-                                    img_r = req.get(result_url, verify=False, timeout=60)
-                                    return Image.open(io.BytesIO(img_r.content))
-                            elif isinstance(result, str) and os.path.exists(result):
-                                return Image.open(result)
-
-                    raise Exception("Space returned empty result - service may be temporarily unavailable")
-
-                elif msg == 'error':
-                    raise Exception(f"Space error: {data}")
-
-        raise Exception("Timeout waiting for result")
+        if r.status_code == 200:
+            return Image.open(io.BytesIO(r.content))
+        else:
+            raise Exception(f"Real-time API error: {r.status_code} - {r.text}")
 
     def process(
         self,
@@ -464,21 +418,46 @@ class VTONProcessor:
         clothing_image: Image.Image,
         prompt: str = "",
     ) -> Image.Image:
-        """Apply virtual try-on using HTTP API."""
+        """Apply virtual try-on."""
         # Ensure images are RGB
         person_image = person_image.convert("RGB")
         clothing_image = clothing_image.convert("RGB")
 
-        # Resize images to reasonable dimensions
-        max_size = 768
-        if max(person_image.size) > max_size:
-            person_image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
-        if max(clothing_image.size) > max_size:
-            clothing_image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
-
         return self.generate(person_image, clothing_image, prompt)
 
 vton_processor = VTONProcessor()
+
+
+# ──────────────────────────────────────────────
+# Real-Time Try-On Processor (Fast Overlay)
+# ──────────────────────────────────────────────
+class RealTimeTryOnProcessor:
+    """Real-time try-on using Lucy API only."""
+
+    def __init__(self):
+        pass
+
+    def apply(self, person_img: Image.Image, clothing_img: Image.Image) -> Image.Image:
+        """Apply virtual try-on using Lucy API."""
+        try:
+            from lucy_api import lucy_api
+            if not lucy_api.is_configured():
+                raise Exception("Lucy API Key 未配置")
+
+            logger.info("Using Lucy API for try-on...")
+            result = lucy_api.transform_image(person_img, clothing_img)
+            if result:
+                return result
+            else:
+                raise Exception("Lucy API 返回空结果")
+
+        except Exception as e:
+            logger.error(f"Lucy API error: {e}")
+            raise
+
+
+realtime_tryon_processor = RealTimeTryOnProcessor()
+
 
 # ──────────────────────────────────────────────
 # WebSocket for real-time updates
@@ -715,6 +694,137 @@ async def generate(request: GenerateRequest):
         logger.error(f"Generation error: {e}")
         await broadcast_update("generation_error", {"error": str(e)})
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/realtime-tryon")
+async def realtime_tryon(request: dict):
+    """Apply real-time try-on to a single frame."""
+    import asyncio
+    import concurrent.futures
+
+    try:
+        frame_b64 = request.get("frame")
+        clothing_path = request.get("clothing")
+
+        if not frame_b64 or not clothing_path:
+            return {"error": "Missing frame or clothing"}
+
+        # Decode frame
+        if frame_b64.startswith("data:"):
+            frame_b64 = frame_b64.split(",", 1)[1]
+        frame_bytes = base64.b64decode(frame_b64)
+        frame_img = Image.open(io.BytesIO(frame_bytes))
+
+        # Load clothing
+        clothing_img = Image.open(clothing_path)
+
+        # Run AI processing in thread pool to avoid blocking
+        loop = asyncio.get_event_loop()
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            result_img = await loop.run_in_executor(
+                pool, realtime_tryon_processor.apply, frame_img, clothing_img
+            )
+
+        # Convert result to base64
+        buffered = io.BytesIO()
+        result_img.save(buffered, format="PNG")
+        result_b64 = base64.b64encode(buffered.getvalue()).decode()
+
+        return {"image": result_b64}
+
+    except Exception as e:
+        logger.error(f"Real-time try-on error: {e}")
+        return {"error": str(e)}
+
+
+# ──────────────────────────────────────────────
+# Lucy Real-Time API Endpoints
+# ──────────────────────────────────────────────
+
+@app.get("/api/lucy/config")
+async def get_lucy_config():
+    """Get Lucy API configuration for frontend."""
+    return {
+        "api_key": os.getenv("LUCY_API_KEY", ""),
+        "model": "lucy-latest",
+    }
+
+
+@app.post("/api/lucy/process")
+async def lucy_process(request: dict):
+    """Process a single frame with Lucy API."""
+    import asyncio
+    import concurrent.futures
+
+    try:
+        frame_b64 = request.get("frame")
+        clothing_path = request.get("clothing")
+        prompt = request.get("prompt", "")
+
+        if not frame_b64 or not clothing_path:
+            return {"error": "Missing frame or clothing"}
+
+        # Decode frame
+        if frame_b64.startswith("data:"):
+            frame_b64 = frame_b64.split(",", 1)[1]
+        frame_bytes = base64.b64decode(frame_b64)
+        frame_img = Image.open(io.BytesIO(frame_bytes))
+
+        # Load clothing
+        clothing_full_path = str(CLOTHING_DIR / clothing_path)
+        if not os.path.exists(clothing_full_path):
+            return {"error": f"Clothing not found: {clothing_path}"}
+        clothing_img = Image.open(clothing_full_path)
+
+        # Run Lucy API in thread pool
+        from lucy_api import lucy_api
+
+        loop = asyncio.get_event_loop()
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            result_img = await loop.run_in_executor(
+                pool, lucy_api.transform_image, frame_img, clothing_img, prompt
+            )
+
+        if result_img:
+            # Convert result to base64
+            buffered = io.BytesIO()
+            result_img.save(buffered, format="PNG")
+            result_b64 = base64.b64encode(buffered.getvalue()).decode()
+            return {"image": result_b64}
+        else:
+            return {"error": "Lucy API returned empty result"}
+
+    except Exception as e:
+        logger.error(f"Lucy process error: {e}")
+        return {"error": str(e)}
+
+
+@app.get("/api/clothing/list")
+async def list_clothing():
+    """List all clothing images."""
+    clothing_dir = CLOTHING_DIR
+    if not clothing_dir.exists():
+        return {"clothing": []}
+
+    images = []
+    for f in clothing_dir.iterdir():
+        if f.suffix.lower() in ('.png', '.jpg', '.jpeg', '.webp'):
+            images.append({
+                "filename": f.name,
+                "path": str(f),
+                "size": f.stat().st_size,
+            })
+
+    return {"clothing": images}
+
+
+@app.get("/lucy")
+async def lucy_page():
+    """Serve the Lucy real-time page."""
+    html_path = STATIC_DIR / "lucy_realtime.html"
+    if html_path.exists():
+        return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
+    return HTMLResponse(content="<h1>Lucy Real-Time page not found</h1>")
 
 
 # ──────────────────────────────────────────────

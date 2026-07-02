@@ -18,7 +18,7 @@
         </div>
         <div class="top-bar__right">
             <div class="obs-connect-group">
-                <input type="password" id="obsPassword" class="obs-password-input" placeholder="OBS WebSocket密码" title="OBS WebSocket密码">
+                <input type="password" id="obsPassword" class="obs-password-input" placeholder="OBS WebSocket密码" title="OBS WebSocket密码" value="a123456789">
                 <button class="btn btn--small btn--primary" id="btnConnectOBS" title="Connect to OBS">
                     <i class="fas fa-link"></i> 连接
                 </button>
@@ -118,7 +118,6 @@
                     <button class="mode-btn active" data-mode="tryon" style="flex: 1;">
                         <i class="fas fa-tshirt"></i>
                         <span>AI 服装换装</span>
-                        <small>IDM-VTON</small>
                     </button>
                 </div>
             </div>
@@ -141,13 +140,6 @@
                         <button class="btn btn--tiny btn--danger" id="btnClearClothing" title="图片をクリア">
                             <i class="fas fa-times"></i>
                         </button>
-                    </div>
-                </div>
-                <!-- Quick Clothing Images -->
-                <div class="quick-clothing">
-                    <span class="quick-clothing__label">快速选择:</span>
-                    <div class="quick-clothing__grid" id="quickClothingGrid">
-                        <!-- Will be populated dynamically -->
                     </div>
                 </div>
             </div>

@@ -13,6 +13,7 @@ const state = {
     currentMode: 'tryon',
     currentClothing: null,
     ws: null,
+    obsPassword: localStorage.getItem('obsPassword') || 'a123456789',
 };
 
 const CONFIG = {
@@ -57,7 +58,6 @@ const elements = {
     clothingPreviewImg: $('#clothingPreviewImg'),
     clothingFileInput: $('#clothingFileInput'),
     btnClearClothing: $('#btnClearClothing'),
-    quickClothingGrid: $('#quickClothingGrid'),
 
     // Right panel - controls
     promptInput: $('#promptInput'),
@@ -182,7 +182,34 @@ function updateOBSStatus(connected) {
             <p>OBS 直播画面已连接</p>
             <p class="small">正在获取画面...</p>
         `;
+    } else {
+        // Reset placeholder when disconnected
+        elements.previewPlaceholder.innerHTML = `
+            <i class="fas fa-tv"></i>
+            <p>OBS直播画面将显示在这里</p>
+            <p class="small">请连接OBS</p>
+        `;
+        elements.previewPlaceholder.style.display = 'flex';
+        elements.obsCanvas.style.display = 'none';
+
+        // Clear bottom preview
+        elements.bottomPreviewImg.style.display = 'none';
+        elements.bottomPreviewImg.src = '';
+        const bottomPlaceholder = document.querySelector('.bottom-preview__placeholder');
+        if (bottomPlaceholder) bottomPlaceholder.style.display = 'flex';
+
+        // Clear AI generated overlay and badge
+        if (elements.generatedOverlay) {
+            elements.generatedOverlay.style.display = 'none';
+            elements.generatedOverlay.src = '';
+        }
+        if (elements.aiBadge) {
+            elements.aiBadge.style.display = 'none';
+        }
     }
+
+    // Update start button state
+    updateStartButton();
 }
 
 function updateLiveStatus(isLive) {
@@ -210,6 +237,9 @@ async function connectOBS() {
             showToast('已连接OBS', 'success');
             updateOBSStatus(true);
             startOBSStream();
+            // Save password for auto-reconnect
+            localStorage.setItem('obsPassword', password);
+            state.obsPassword = password;
         } else {
             const error = await response.json().catch(() => ({}));
             showToast('OBS连接失败: ' + (error.detail || '请确认密码'), 'error');
@@ -222,8 +252,11 @@ async function connectOBS() {
 async function disconnectOBS() {
     try {
         await fetch('/api/obs/disconnect', { method: 'POST' });
+        stopOBSStream(); // Stop stream first to set flag
         updateOBSStatus(false);
-        stopOBSStream();
+        // Clear saved password
+        localStorage.removeItem('obsPassword');
+        state.obsPassword = '';
         showToast('已断开OBS', 'info');
     } catch (e) {
         showToast('断开错误: ' + e.message, 'error');
@@ -234,64 +267,192 @@ async function disconnectOBS() {
 // OBS Stream Capture
 // ──────────────────────────────────────────────
 let streamInterval = null;
+let isOBSRendering = false;
+let isRealTimeTryOn = false;
+let lastClothingPath = null;
+let frameCount = 0; // Track frame count for throttling
 
 function startOBSStream() {
     if (streamInterval) return;
+    isOBSRendering = true;
+    frameCount = 0;
 
     // Use canvas to render frames
     const canvas = elements.obsCanvas;
     const ctx = canvas.getContext('2d');
+    let isFetching = false;
+    let lastFrameTime = 0;
+    const targetFPS = 15; // Target 15 FPS
+    const frameInterval = 1000 / targetFPS;
 
-    streamInterval = setInterval(async () => {
-        if (!state.obsConnected) {
+    function fetchFrame() {
+        if (!isOBSRendering || !state.obsConnected) {
             stopOBSStream();
             return;
         }
 
-        try {
-            const response = await fetch('/api/obs/screenshot');
-            if (response.ok) {
-                const data = await response.json();
-                if (data.image) {
+        const now = Date.now();
+        const elapsed = now - lastFrameTime;
+
+        // Throttle to target FPS
+        if (elapsed < frameInterval || isFetching) {
+            requestAnimationFrame(fetchFrame);
+            return;
+        }
+
+        // Reduce FPS during AI processing
+        if (tryOnProcessing && frameCount % 5 !== 0) {
+            frameCount++;
+            requestAnimationFrame(fetchFrame);
+            return;
+        }
+
+        isFetching = true;
+        lastFrameTime = now;
+        frameCount++;
+
+        fetch('/api/obs/screenshot')
+            .then(response => {
+                if (response.ok) return response.json();
+                throw new Error('Failed');
+            })
+            .then(data => {
+                if (data.image && isOBSRendering) {
                     renderFrame(data.image);
                 }
-            }
-        } catch (e) {
-            // Silently handle frame capture errors
-        }
-    }, 100); // ~10fps
+            })
+            .catch(() => {})
+            .finally(() => {
+                isFetching = false;
+                requestAnimationFrame(fetchFrame);
+            });
+    }
+
+    // Start the frame loop
+    requestAnimationFrame(fetchFrame);
 }
 
 function stopOBSStream() {
-    if (streamInterval) {
-        clearInterval(streamInterval);
-        streamInterval = null;
+    isOBSRendering = false; // Stop rendering immediately
+
+    // Clear main canvas and show placeholder
+    const canvas = elements.obsCanvas;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    canvas.style.display = 'none';
+    elements.previewPlaceholder.style.display = 'flex';
+    elements.previewPlaceholder.innerHTML = `
+        <i class="fas fa-tv"></i>
+        <p>OBS直播画面将显示在这里</p>
+        <p class="small">请连接OBS</p>
+    `;
+
+    // Clear bottom preview image
+    elements.bottomPreviewImg.style.display = 'none';
+    elements.bottomPreviewImg.src = '';
+    const bottomPlaceholder = document.querySelector('.bottom-preview__placeholder');
+    if (bottomPlaceholder) bottomPlaceholder.style.display = 'flex';
+
+    // Clear AI generated overlay and badge
+    if (elements.generatedOverlay) {
+        elements.generatedOverlay.style.display = 'none';
+        elements.generatedOverlay.src = '';
+    }
+    if (elements.aiBadge) {
+        elements.aiBadge.style.display = 'none';
     }
 }
 
 function renderFrame(base64Image) {
-    elements.previewPlaceholder.style.display = 'none';
-    elements.obsCanvas.style.display = 'block';
+    // Don't render if OBS is disconnected
+    if (!isOBSRendering) return;
 
     const img = new Image();
     img.onload = () => {
+        // Check again after image loaded
+        if (!isOBSRendering) return;
+
+        // Bottom preview: always show original OBS feed
+        elements.bottomPreviewImg.src = `data:image/jpeg;base64,${base64Image}`;
+        elements.bottomPreviewImg.style.display = 'block';
+        const bottomPlaceholder = document.querySelector('.bottom-preview__placeholder');
+        if (bottomPlaceholder) bottomPlaceholder.style.display = 'none';
+
+        // Always show OBS feed in main canvas (background)
+        elements.previewPlaceholder.style.display = 'none';
+        elements.obsCanvas.style.display = 'block';
         const canvas = elements.obsCanvas;
         const ctx = canvas.getContext('2d');
         canvas.width = img.width;
         canvas.height = img.height;
         ctx.drawImage(img, 0, 0);
 
-        // Always update bottom preview with live feed when no AI overlay
-        const hasOverlay = elements.generatedOverlay && elements.generatedOverlay.style.display !== 'none';
-        if (!hasOverlay) {
-            elements.bottomPreviewImg.src = canvas.toDataURL('image/png');
-            elements.bottomPreviewImg.style.display = 'block';
-            // Hide placeholder
-            const placeholder = document.querySelector('.bottom-preview__placeholder');
-            if (placeholder) placeholder.style.display = 'none';
+        // If real-time try-on is active, send frame for AI processing
+        if (isRealTimeTryOn && state.currentClothing) {
+            applyRealTimeTryOn(base64Image);
         }
     };
-    img.src = `data:image/png;base64,${base64Image}`;
+    img.src = `data:image/jpeg;base64,${base64Image}`;
+}
+
+// ──────────────────────────────────────────────
+// Real-Time Try-On Processing
+// ──────────────────────────────────────────────
+let tryOnProcessing = false;
+let isSwitchingState = false;
+let lastProcessedClothing = null;
+
+async function applyRealTimeTryOn(base64Frame) {
+    if (!state.currentClothing) {
+        return;
+    }
+
+    // Skip if already processing
+    if (tryOnProcessing) {
+        return;
+    }
+
+    // Only process if clothing changed or first time
+    if (lastProcessedClothing === state.currentClothing && elements.generatedOverlay.style.display !== 'none') {
+        return;
+    }
+
+    tryOnProcessing = true;
+    lastProcessedClothing = state.currentClothing;
+
+    try {
+        // Show processing indicator
+        elements.aiBadge.textContent = 'AI 处理中...';
+        elements.aiBadge.style.display = 'block';
+
+        const response = await fetch('/api/realtime-tryon', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                frame: base64Frame,
+                clothing: state.currentClothing,
+            }),
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            if (data.image) {
+                elements.generatedOverlay.src = `data:image/png;base64,${data.image}`;
+                elements.generatedOverlay.style.display = 'block';
+                elements.aiBadge.textContent = 'AI Generated';
+                elements.aiBadge.style.display = 'block';
+            } else {
+                elements.aiBadge.textContent = 'AI 生成失败';
+            }
+        } else {
+            elements.aiBadge.textContent = 'AI 错误';
+        }
+    } catch (e) {
+        console.error('Try-on error:', e);
+        elements.aiBadge.textContent = 'AI 错误';
+    } finally {
+        tryOnProcessing = false;
+    }
 }
 
 // ──────────────────────────────────────────────
@@ -390,6 +551,8 @@ async function handleClothingFile(file) {
         if (response.ok) {
             const data = await response.json();
             state.currentClothing = data.path;
+            lastClothingPath = null; // Reset to force refresh
+            tryOnProcessing = false; // Reset processing flag
             showToast('服装图片已上传', 'success');
             updateStartButton();
         } else {
@@ -617,93 +780,96 @@ function initImageGallery() {
 }
 
 // ──────────────────────────────────────────────
-// Quick Clothing Selection
-// ──────────────────────────────────────────────
-function initQuickClothing() {
-    const quickItems = [
-        'https://picsum.photos/seed/qc1/60/60',
-        'https://picsum.photos/seed/qc2/60/60',
-        'https://picsum.photos/seed/qc3/60/60',
-        'https://picsum.photos/seed/qc4/60/60',
-        'https://picsum.photos/seed/qc5/60/60',
-    ];
-
-    quickItems.forEach(src => {
-        const div = document.createElement('div');
-        div.className = 'quick-thumb';
-        div.innerHTML = `<img src="${src}" alt="Quick">`;
-
-        div.addEventListener('click', () => {
-            $$('.quick-thumb').forEach(t => t.classList.remove('active'));
-            div.classList.add('active');
-            handleClothingUrl(src);
-        });
-
-        elements.quickClothingGrid.appendChild(div);
-    });
-}
-
-// ──────────────────────────────────────────────
 // Generate (Virtual Try-On)
 // ──────────────────────────────────────────────
 function updateStartButton() {
-    // Only clothing image is required
-    // Person image comes from OBS live stream automatically
-    const canStart = state.currentClothing;
+    // Both clothing image and OBS connection are required
+    const canStart = state.currentClothing && state.obsConnected;
     elements.btnStart.disabled = !canStart;
+
+    // Update tooltip
+    if (!state.currentClothing) {
+        elements.btnStart.title = '请先上传服装图片';
+    } else if (!state.obsConnected) {
+        elements.btnStart.title = '请先连接OBS';
+    } else {
+        elements.btnStart.title = '开始实时换装';
+    }
 }
 
 async function startGeneration() {
+    // Prevent rapid clicking
+    if (isSwitchingState) return;
+
     if (!state.currentClothing) {
         showToast('请先上传服装图片', 'error');
         return;
     }
 
+    if (!state.obsConnected) {
+        showToast('请先连接OBS', 'error');
+        return;
+    }
+
+    // Lock state
+    isSwitchingState = true;
+    elements.btnStart.disabled = true;
+    elements.btnStop.disabled = true;
+
+    // Enable real-time try-on mode
+    isRealTimeTryOn = true;
     state.isGenerating = true;
     elements.btnStart.style.display = 'none';
     elements.btnStop.style.display = '';
-    showLoading('AI 换装中，请稍候...');
+    showToast('实时换装已开启', 'success');
 
-    const prompt = elements.promptInput.value;
-
-    try {
-        const response = await fetch('/api/generate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                prompt: prompt,
-                mode: state.currentMode,
-                model: 'lucy-vton-3',
-            }),
-        });
-
-        if (response.ok) {
-            const data = await response.json();
-            if (data.image) {
-                showGeneratedImage(data.image);
-                showToast('AI换装完成', 'success');
-            }
-        } else {
-            const error = await response.json();
-            showToast(`生成错误: ${error.detail}`, 'error');
-        }
-    } catch (e) {
-        showToast('生成错误: ' + e.message, 'error');
-    } finally {
-        state.isGenerating = false;
-        elements.btnStart.style.display = '';
-        elements.btnStop.style.display = 'none';
-        hideLoading();
-    }
+    // Unlock after a short delay
+    setTimeout(() => {
+        isSwitchingState = false;
+        elements.btnStop.disabled = false;
+    }, 500);
 }
 
 async function stopGeneration() {
-    // Stop generation logic
+    // Prevent rapid clicking
+    if (isSwitchingState) return;
+
+    // Lock state
+    isSwitchingState = true;
+    elements.btnStart.disabled = true;
+    elements.btnStop.disabled = true;
+
+    // Stop real-time try-on mode
+    isRealTimeTryOn = false;
     state.isGenerating = false;
+    tryOnProcessing = false;
+    lastProcessedClothing = null;  // Reset so next start will trigger new generation
+    lastClothingPath = null;
+
     elements.btnStart.style.display = '';
     elements.btnStop.style.display = 'none';
-    hideLoading();
-    showToast('已停止生成', 'info');
+
+    // Hide AI overlay and badge
+    if (elements.generatedOverlay) {
+        elements.generatedOverlay.style.display = 'none';
+        elements.generatedOverlay.src = '';
+    }
+    if (elements.aiBadge) {
+        elements.aiBadge.style.display = 'none';
+    }
+
+    // Show canvas again for OBS feed
+    if (isOBSRendering) {
+        elements.obsCanvas.style.display = 'block';
+    }
+
+    showToast('实时换装已停止', 'info');
+
+    // Unlock after a short delay
+    setTimeout(() => {
+        isSwitchingState = false;
+        updateStartButton();
+    }, 500);
 }
 
 // ──────────────────────────────────────────────
@@ -824,7 +990,6 @@ function init() {
     initImageGallery();
     initModeSelection();
     initPromptTags();
-    initQuickClothing();
 
     // Connect WebSocket
     connectWebSocket();
@@ -834,6 +999,13 @@ function init() {
         .then(res => res.json())
         .then(data => updateStatus(data))
         .catch(e => console.log('Could not fetch initial status'));
+
+    // Auto-reconnect OBS if password was saved
+    if (state.obsPassword) {
+        document.getElementById('obsPassword').value = state.obsPassword;
+        console.log('Auto-reconnecting OBS...');
+        connectOBS();
+    }
 
     console.log('OBS Virtual Try-On - Ready');
 }
