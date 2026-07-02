@@ -816,9 +816,20 @@ async function startGeneration() {
     elements.btnStart.disabled = true;
     elements.btnStop.disabled = true;
 
+    // Clear previous AI result immediately
+    if (elements.generatedOverlay) {
+        elements.generatedOverlay.style.display = 'none';
+        elements.generatedOverlay.src = '';
+    }
+    if (elements.aiBadge) {
+        elements.aiBadge.style.display = 'none';
+    }
+
     // Enable real-time try-on mode
     isRealTimeTryOn = true;
     state.isGenerating = true;
+    lastProcessedClothing = null;  // Reset to trigger new generation
+    tryOnProcessing = false;  // Reset processing flag
     elements.btnStart.style.display = 'none';
     elements.btnStop.style.display = '';
     showToast('实时换装已开启', 'success');
@@ -849,14 +860,19 @@ async function stopGeneration() {
     elements.btnStart.style.display = '';
     elements.btnStop.style.display = 'none';
 
-    // Hide AI overlay and badge
+    // Hide AI overlay and badge - CLEAR EVERYTHING
     if (elements.generatedOverlay) {
         elements.generatedOverlay.style.display = 'none';
         elements.generatedOverlay.src = '';
     }
     if (elements.aiBadge) {
         elements.aiBadge.style.display = 'none';
+        elements.aiBadge.textContent = '';
     }
+
+    // Show canvas again for OBS feed
+    elements.obsCanvas.style.display = 'block';
+    elements.previewPlaceholder.style.display = 'none';
 
     // Show canvas again for OBS feed
     if (isOBSRendering) {
