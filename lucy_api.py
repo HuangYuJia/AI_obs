@@ -89,12 +89,6 @@ class LucyAPI:
             logger.error("Lucy API key not configured")
             return None
 
-        # Check cache
-        cache_key = self._get_cache_key(person_image, reference_image, prompt)
-        if cache_key in self.cache:
-            logger.info("Cache hit! Returning cached result")
-            return self.cache[cache_key]
-
         try:
             # Compress images for faster upload
             logger.info("Compressing images...")
@@ -137,11 +131,9 @@ class LucyAPI:
                 if "job_id" in result and result.get("status") == "pending":
                     job_id = result["job_id"]
                     logger.info(f"Async job: {job_id}")
-                    return self._poll_job(job_id, cache_key)
+                    return self._poll_job(job_id)
                 else:
                     img = self._extract_image(result)
-                    if img:
-                        self._cache_result(cache_key, img)
                     return img
             else:
                 logger.error(f"Lucy API error: {r.status_code} - {r.text[:300]}")
@@ -151,7 +143,7 @@ class LucyAPI:
             logger.error(f"Lucy API error: {e}")
             return None
 
-    def _poll_job(self, job_id: str, cache_key: str = None, max_wait: int = 120) -> Optional[Image.Image]:
+    def _poll_job(self, job_id: str, max_wait: int = 120) -> Optional[Image.Image]:
         """Poll for async job completion and download result."""
         import time
 
@@ -188,9 +180,8 @@ class LucyAPI:
                             else:
                                 img = Image.open(io.BytesIO(content_r.content))
 
-                            if img and cache_key:
-                                self._cache_result(cache_key, img)
-                            return img
+                            if img:
+                                return img
                         else:
                             logger.error(f"Download failed: {content_r.status_code}")
                             return None
@@ -217,6 +208,10 @@ class LucyAPI:
             # Remove oldest entry
             self.cache.pop(next(iter(self.cache)))
         self.cache[key] = image.copy()
+
+    def clear_cache(self):
+        """Clear all cached results."""
+        self.cache.clear()
 
     def _extract_image(self, result: dict) -> Optional[Image.Image]:
         """Extract image from API response."""

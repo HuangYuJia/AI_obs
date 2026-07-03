@@ -293,10 +293,10 @@ class OBSController:
                 "GetSourceScreenshot",
                 {
                     "sourceName": scene_name,
-                    "imageFormat": "jpeg",  # JPEG is faster than PNG
-                    "imageWidth": 640,      # Reduced from 1920
-                    "imageHeight": 360,     # Reduced from 1080
-                    "imageCompressionQuality": 50  # Lower quality for speed
+                    "imageFormat": "jpeg",
+                    "imageWidth": 1280,
+                    "imageHeight": 720,
+                    "imageCompressionQuality": 80
                 }
             )
             # Remove data:image/png;base64, prefix if present
