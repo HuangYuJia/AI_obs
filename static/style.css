@@ -532,7 +532,7 @@ html, body {
     left: 0;
     width: 100%;
     height: 100%;
-    object-fit: fill;
+    object-fit: contain;
 }
 
 .main-preview__placeholder {
@@ -590,30 +590,19 @@ html, body {
     left: 0;
     width: 100%;
     height: 100%;
-    object-fit: fill;
+    object-fit: contain;
     z-index: 5;
     pointer-events: none;
 }
 
-/* Bottom Controls */
-.bottom-controls {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 8px 12px;
-    background: var(--bg-secondary);
-    border-top: 1px solid var(--border-color);
+/* Side Preview (right panel) */
+.side-preview {
+    padding: 0 12px 12px;
 }
 
-/* Bottom Preview */
-.bottom-preview {
-    display: flex;
-    align-items: center;
-}
-
-.bottom-preview__video {
-    width: 200px;
-    height: 113px;
+.side-preview__video {
+    width: 100%;
+    aspect-ratio: 16 / 9;
     background: var(--bg-tertiary);
     border-radius: 6px;
     overflow: hidden;
@@ -621,13 +610,13 @@ html, body {
     border: 1px solid var(--border-color);
 }
 
-.bottom-preview__video img {
+.side-preview__video img {
     width: 100%;
     height: 100%;
     object-fit: cover;
 }
 
-.bottom-preview__placeholder {
+.side-preview__placeholder {
     position: absolute;
     top: 0;
     left: 0;
@@ -638,13 +627,23 @@ html, body {
     align-items: center;
     justify-content: center;
     color: var(--text-muted);
-    font-size: 10px;
+    font-size: 12px;
     gap: 4px;
 }
 
-.bottom-preview__placeholder i {
-    font-size: 16px;
+.side-preview__placeholder i {
+    font-size: 20px;
     opacity: 0.5;
+}
+
+/* Bottom Controls (removed - kept for reference) */
+.bottom-controls {
+    display: none;
+}
+
+/* Bottom Preview (legacy - hidden) */
+.bottom-preview__placeholder {
+    display: none;
 }
 
 /* ═══════════════════════════════════════════════
@@ -682,12 +681,6 @@ html, body {
 }
 
 .step.active {
-    background: rgba(108, 92, 231, 0.15);
-    border-color: var(--accent-primary);
-    color: var(--accent-secondary);
-}
-
-.step.completed {
     background: rgba(0, 184, 148, 0.15);
     border-color: var(--accent-green);
     color: var(--accent-green);

@@ -37,9 +37,6 @@
                 <h3 class="panel__title">
                     <i class="fas fa-images"></i> 服装图库
                 </h3>
-                <button class="btn btn--tiny btn--outline" id="btnRefreshImages" title="刷新图片">
-                    <i class="fas fa-sync-alt"></i>
-                </button>
                 <button class="btn btn--tiny btn--primary" id="btnAddLocal" title="添加本地图片">
                     <i class="fas fa-plus"></i> 本地
                 </button>
@@ -71,22 +68,6 @@
                     <!-- Generated Image Overlay -->
                     <img id="generatedOverlay" class="generated-overlay" style="display:none;" alt="Generated">
                 </div>
-
-                <!-- Bottom Controls -->
-                <div class="bottom-controls">
-                    <div class="bottom-preview">
-                        <div class="bottom-preview__video">
-                            <img id="bottomPreviewImg" src="" alt="原始画面" style="display:none;">
-                            <div class="bottom-preview__placeholder">
-                                <i class="fas fa-image"></i>
-                                <span>原始直播画面</span>
-                            </div>
-                        </div>
-                    </div>
-                    <button class="btn btn--tiny btn--outline" id="btnVolume">
-                        <i class="fas fa-volume-up"></i> 音量
-                    </button>
-                </div>
             </div>
         </section>
 
@@ -100,12 +81,12 @@
 
             <!-- Step Navigation -->
             <div class="step-nav">
-                <div class="step completed" data-step="1">
+                <div class="step active" data-step="1" id="step1">
                     <span class="step__number">1</span>
                     <span class="step__label">上传服装</span>
                 </div>
                 <div class="step__arrow">→</div>
-                <div class="step active" data-step="2">
+                <div class="step" data-step="2" id="step2">
                     <span class="step__number">2</span>
                     <span class="step__label">AI 换装</span>
                 </div>
@@ -125,19 +106,19 @@
             <!-- Clothing Drag & Drop Area -->
             <div class="clothing-section">
                 <label class="mode-label">
-                    <i class="fas fa-tshirt"></i> 服の图片
+                    <i class="fas fa-tshirt"></i> 服装图片
                     <small>上传要穿的衣服</small>
                 </label>
                 <div class="drag-drop-area" id="clothingDropArea">
                     <div class="drag-drop-area__content" id="clothingDropContent">
                         <i class="fas fa-cloud-upload-alt"></i>
-                        <p>服の图片をここにドラッグ&ドロップ</p>
+                        <p>将服装图片拖拽到此处</p>
                         <p class="small">或点击选择</p>
                         <input type="file" id="clothingFileInput" accept="image/*" style="display:none;">
                     </div>
                     <div class="drag-drop-area__preview" id="clothingPreview" style="display:none;">
                         <img id="clothingPreviewImg" src="" alt="Clothing">
-                        <button class="btn btn--tiny btn--danger" id="btnClearClothing" title="图片をクリア">
+                        <button class="btn btn--tiny btn--danger" id="btnClearClothing" title="清除图片">
                             <i class="fas fa-times"></i>
                         </button>
                     </div>
@@ -150,7 +131,7 @@
                     <i class="fas fa-comment-dots"></i> 提示词
                     <small>可选：描述想要的效果</small>
                 </label>
-                <textarea id="promptInput" class="prompt-textarea" placeholder="描述想要的效果...">beautiful realistic woman, detailed skin texture, lighting, high detail</textarea>
+                <textarea id="promptInput" class="prompt-textarea" placeholder="描述想要的效果...">Substitute the current clothing with the clothing from the reference image</textarea>
                 <div class="prompt-tags">
                     <button class="prompt-tag" data-prompt="可爱少女">可爱少女</button>
                     <button class="prompt-tag" data-prompt="清纯">清纯</button>
@@ -172,9 +153,20 @@
                     <button class="btn btn--danger btn--small" id="btnStop" style="display:none;">
                         <i class="fas fa-stop"></i> 停止
                     </button>
-                    <button class="btn btn--outline btn--small" id="btnVolume">
-                        <i class="fas fa-volume-up"></i>
-                    </button>
+                </div>
+            </div>
+
+            <!-- Original Feed Preview -->
+            <div class="side-preview">
+                <label class="mode-label">
+                    <i class="fas fa-image"></i> 原始画面
+                </label>
+                <div class="side-preview__video">
+                    <img id="bottomPreviewImg" src="" alt="原始画面" style="display:none;">
+                    <div class="side-preview__placeholder">
+                        <i class="fas fa-tv"></i>
+                        <span>未连接</span>
+                    </div>
                 </div>
             </div>
         </aside>

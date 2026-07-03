@@ -25,7 +25,7 @@ from PIL import Image, ImageDraw
 from pydantic import BaseModel
 
 # Load environment variables
-load_dotenv()
+load_dotenv(override=True)
 
 # Configure proxy from env
 HTTP_PROXY = os.getenv("HTTP_PROXY") or os.getenv("http_proxy")
@@ -63,11 +63,10 @@ SERVER_PORT = int(os.getenv("SERVER_PORT", "8443"))
 # Directories
 BASE_DIR = Path(__file__).parent
 STATIC_DIR = BASE_DIR / "static"
-UPLOAD_DIR = BASE_DIR / "uploads"
-OUTPUT_DIR = BASE_DIR / "outputs"
 CLOTHING_DIR = BASE_DIR / "clothing"
+UPLOAD_DIR = BASE_DIR / "uploads"
 
-for d in [UPLOAD_DIR, OUTPUT_DIR, CLOTHING_DIR]:
+for d in [CLOTHING_DIR, UPLOAD_DIR]:
     d.mkdir(exist_ok=True)
 
 # ──────────────────────────────────────────────
@@ -82,7 +81,6 @@ class AppState:
         self.current_model = "lucy-vton-3"
         self.current_prompt = ""
         self.current_clothing: Optional[str] = None
-        self.current_person: Optional[str] = None
         self.generated_image: Optional[str] = None
         self.websocket_clients: list[WebSocket] = []
         self.frame_count = 0
@@ -102,7 +100,6 @@ class AppState:
             "current_model": self.current_model,
             "current_prompt": self.current_prompt,
             "current_clothing": self.current_clothing,
-            "current_person": self.current_person,
             "generated_image": self.generated_image,
             "timecode": f"{minutes:02d}:{seconds:02d}",
             "frame_count": self.frame_count,
@@ -293,10 +290,9 @@ class OBSController:
                 "GetSourceScreenshot",
                 {
                     "sourceName": scene_name,
-                    "imageFormat": "jpeg",
-                    "imageWidth": 1280,
-                    "imageHeight": 720,
-                    "imageCompressionQuality": 80
+                    "imageFormat": "png",
+                    "imageWidth": 1920,
+                    "imageHeight": 1080,
                 }
             )
             # Remove data:image/png;base64, prefix if present
@@ -322,141 +318,6 @@ class OBSController:
             return False
 
 obs_controller = OBSController()
-
-# ──────────────────────────────────────────────
-# VTON (Virtual Try-On) Model Integration
-# ──────────────────────────────────────────────
-class VTONProcessor:
-    """
-    Virtual Try-On processor using pre-generated results or real-time API.
-    """
-
-    def __init__(self):
-        self.api_url = "http://localhost:8445"
-        self.pre_generated_dir = BASE_DIR / "outputs" / "pre_generated"
-        self.pre_generated_images = {}
-        self.clothing_to_pregen = {}  # Map clothing filename to pre-generated path
-        self.load_pre_generated()
-
-    def load_pre_generated(self):
-        """Load all pre-generated try-on results."""
-        if not self.pre_generated_dir.exists():
-            return
-
-        for person_dir in self.pre_generated_dir.iterdir():
-            if person_dir.is_dir():
-                # Read results.json to get clothing mapping
-                results_file = person_dir / "results.json"
-                if results_file.exists():
-                    try:
-                        with open(results_file, 'r') as f:
-                            results = json.load(f)
-                        for item in results.get('results', []):
-                            if item.get('status') == 'success':
-                                clothing_name = Path(item['clothing']).stem
-                                output_path = person_dir / item['output']
-                                if output_path.exists():
-                                    self.clothing_to_pregen[clothing_name] = str(output_path)
-                                    logger.info(f"Mapped clothing: {clothing_name} -> {output_path.name}")
-                    except Exception as e:
-                        logger.error(f"Failed to load results.json: {e}")
-
-                # Also scan for tryon images directly
-                for img_file in person_dir.glob("*_tryon.png"):
-                    clothing_name = img_file.stem.replace("_tryon", "")
-                    if clothing_name not in self.clothing_to_pregen:
-                        self.clothing_to_pregen[clothing_name] = str(img_file)
-
-        logger.info(f"Loaded {len(self.clothing_to_pregen)} pre-generated mappings")
-
-    def find_matching_pre_generated(self, clothing_image: Image.Image) -> Optional[str]:
-        """Find matching pre-generated image by comparing image hashes."""
-        # For now, return the first available pre-generated image
-        # In production, you'd compare image hashes or use a database
-        if self.clothing_to_pregen:
-            return list(self.clothing_to_pregen.values())[0]
-        return None
-
-    def generate(self, person_image: Image.Image, clothing_image: Image.Image, prompt: str = "") -> Image.Image:
-        """Generate virtual try-on result using pre-generated image or real-time API."""
-        import requests as req
-
-        # Check if we have a pre-generated result
-        pre_gen_path = self.find_matching_pre_generated(clothing_image)
-        if pre_gen_path:
-            logger.info(f"Using pre-generated image: {pre_gen_path}")
-            return Image.open(pre_gen_path)
-
-        # Fallback to real-time API
-        logger.info("No pre-generated image available, using real-time API...")
-
-        # Convert images to bytes
-        person_buf = io.BytesIO()
-        person_image.save(person_buf, format='PNG')
-        person_buf.seek(0)
-
-        clothing_buf = io.BytesIO()
-        clothing_image.save(clothing_buf, format='PNG')
-        clothing_buf.seek(0)
-
-        # Call real-time API
-        files = {
-            'person': ('person.png', person_buf, 'image/png'),
-            'clothing': ('clothing.png', clothing_buf, 'image/png'),
-        }
-
-        r = req.post(f"{self.api_url}/tryon", files=files, timeout=30)
-
-        if r.status_code == 200:
-            return Image.open(io.BytesIO(r.content))
-        else:
-            raise Exception(f"Real-time API error: {r.status_code} - {r.text}")
-
-    def process(
-        self,
-        person_image: Image.Image,
-        clothing_image: Image.Image,
-        prompt: str = "",
-    ) -> Image.Image:
-        """Apply virtual try-on."""
-        # Ensure images are RGB
-        person_image = person_image.convert("RGB")
-        clothing_image = clothing_image.convert("RGB")
-
-        return self.generate(person_image, clothing_image, prompt)
-
-vton_processor = VTONProcessor()
-
-
-# ──────────────────────────────────────────────
-# Real-Time Try-On Processor (Fast Overlay)
-# ──────────────────────────────────────────────
-class RealTimeTryOnProcessor:
-    """Real-time try-on using Lucy API only."""
-
-    def __init__(self):
-        pass
-
-    def apply(self, person_img: Image.Image, clothing_img: Image.Image) -> Image.Image:
-        """Apply virtual try-on using Lucy API."""
-        try:
-            from lucy_api import lucy_api
-            if not lucy_api.is_configured():
-                raise Exception("Lucy API Key 未配置")
-
-            logger.info("Using Lucy API for try-on...")
-            result = lucy_api.transform_image(person_img, clothing_img)
-            if result:
-                return result
-            else:
-                raise Exception("Lucy API 返回空结果")
-
-        except Exception as e:
-            logger.error(f"Lucy API error: {e}")
-            raise
-
-
-realtime_tryon_processor = RealTimeTryOnProcessor()
 
 
 # ──────────────────────────────────────────────
@@ -484,6 +345,115 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         state.websocket_clients.remove(websocket)
         logger.info(f"WebSocket client disconnected. Total: {len(state.websocket_clients)}")
+
+
+# ──────────────────────────────────────────────
+# WebSocket for Lucy VTON real-time streaming
+# ──────────────────────────────────────────────
+@app.websocket("/ws/vton")
+async def websocket_vton(websocket: WebSocket):
+    """WebSocket endpoint for real-time virtual try-on via Lucy VTON WebRTC."""
+    from lucy_realtime import lucy_realtime
+
+    await websocket.accept()
+    logger.info("VTON WebSocket client connected")
+
+    if not lucy_realtime.is_configured():
+        await websocket.send_json({"type": "error", "message": "Lucy VTON realtime not configured (missing SDK or API key)"})
+        await websocket.close()
+        return
+
+    ws_frame_count = 0
+    sent_frame_count = 0
+
+    async def send_processed_frame(frame_img: Image.Image):
+        """Callback: send processed frame back to frontend."""
+        nonlocal sent_frame_count
+        sent_frame_count += 1
+        try:
+            buffered = io.BytesIO()
+            frame_img.save(buffered, format="PNG")
+            frame_b64 = base64.b64encode(buffered.getvalue()).decode()
+            await websocket.send_json({"type": "frame", "image": frame_b64})
+            if sent_frame_count == 1 or sent_frame_count % 10 == 0:
+                logger.info(f"Sent processed frame #{sent_frame_count} to frontend")
+        except Exception as e:
+            if sent_frame_count <= 2:
+                logger.error(f"Error sending processed frame: {e}")
+
+    try:
+        while True:
+            data = await websocket.receive_json()
+            msg_type = data.get("type")
+
+            if msg_type == "start":
+                # Start a new VTON session with clothing
+                clothing_path = data.get("clothing", "")
+                prompt = data.get("prompt", "try on")
+
+                # Load clothing image bytes
+                image_bytes = None
+                if clothing_path:
+                    full_path = Path(clothing_path)
+                    if not full_path.is_absolute():
+                        full_path = CLOTHING_DIR / clothing_path
+                    if full_path.exists():
+                        image_bytes = full_path.read_bytes()
+                    else:
+                        logger.warning(f"Clothing file not found: {full_path}")
+
+                connected = await lucy_realtime.connect(
+                    on_frame=send_processed_frame,
+                    prompt=prompt,
+                    image_bytes=image_bytes,
+                )
+
+                if connected:
+                    await websocket.send_json({"type": "connected", "message": "Lucy VTON realtime session started"})
+                else:
+                    await websocket.send_json({"type": "error", "message": "Failed to connect to Lucy VTON realtime"})
+
+            elif msg_type == "frame":
+                # Push OBS frame to WebRTC stream
+                ws_frame_count += 1
+                if ws_frame_count == 1 or ws_frame_count % 30 == 0:
+                    logger.info(f"VTON WS received frame #{ws_frame_count}")
+                frame_b64 = data.get("image", "")
+                if frame_b64.startswith("data:"):
+                    frame_b64 = frame_b64.split(",", 1)[1]
+                frame_bytes = base64.b64decode(frame_b64)
+                frame_img = Image.open(io.BytesIO(frame_bytes))
+                await lucy_realtime.push_frame(frame_img)
+
+            elif msg_type == "update":
+                # Update clothing mid-session
+                prompt = data.get("prompt")
+                clothing_path = data.get("clothing")
+                image_bytes = None
+                if clothing_path:
+                    full_path = Path(clothing_path)
+                    if not full_path.is_absolute():
+                        full_path = CLOTHING_DIR / clothing_path
+                    if full_path.exists():
+                        image_bytes = full_path.read_bytes()
+
+                await lucy_realtime.update_clothing(prompt=prompt, image_bytes=image_bytes)
+                await websocket.send_json({"type": "updated", "message": "Clothing updated"})
+
+            elif msg_type == "stop":
+                await lucy_realtime.disconnect()
+                await websocket.send_json({"type": "disconnected", "message": "Session ended"})
+                break
+
+    except WebSocketDisconnect:
+        logger.info("VTON WebSocket client disconnected")
+    except Exception as e:
+        logger.error(f"VTON WebSocket error: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        if lucy_realtime.is_connected:
+            await lucy_realtime.disconnect()
 
 
 async def broadcast_update(message_type: str, data: dict):
@@ -588,7 +558,7 @@ async def upload_clothing(file: UploadFile = File(...)):
 
 @app.post("/api/person/upload")
 async def upload_person(file: UploadFile = File(...)):
-    """Upload a person image for virtual try-on."""
+    """Upload a person/clothing image for current try-on (not added to gallery)."""
     if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image")
 
@@ -600,141 +570,12 @@ async def upload_person(file: UploadFile = File(...)):
     content = await file.read()
     filepath.write_bytes(content)
 
-    state.current_person = str(filepath)
-    await broadcast_update("person_updated", {"path": str(filepath), "filename": filename})
-
     return {
         "status": "uploaded",
         "filename": filename,
         "path": str(filepath),
         "size": len(content),
     }
-
-
-class GenerateRequest(BaseModel):
-    prompt: str = ""
-    mode: str = "tryon"
-    model: str = "lucy-vton-3"
-
-
-@app.post("/api/generate")
-async def generate(request: GenerateRequest):
-    """Generate virtual try-on result using AI API."""
-    if not state.current_clothing:
-        raise HTTPException(status_code=400, detail="请先上传服装图片")
-
-    state.is_generating = True
-    state.current_mode = request.mode
-    state.current_model = request.model
-    state.current_prompt = request.prompt
-
-    await broadcast_update("generation_started", {"mode": request.mode})
-
-    try:
-        # Load clothing image
-        clothing_img = Image.open(state.current_clothing)
-
-        # Get person image: try OBS screenshot first, then uploaded image
-        person_img = None
-
-        # Method 1: Get from OBS live stream
-        if obs_controller.connected:
-            screenshot_b64 = obs_controller.get_screenshot()
-            if screenshot_b64:
-                try:
-                    # Remove data:image prefix if present
-                    if screenshot_b64.startswith("data:"):
-                        screenshot_b64 = screenshot_b64.split(",", 1)[1]
-                    screenshot_bytes = base64.b64decode(screenshot_b64)
-                    person_img = Image.open(io.BytesIO(screenshot_bytes))
-                    logger.info("Using OBS screenshot as person image")
-                except Exception as e:
-                    logger.warning(f"Failed to decode OBS screenshot: {e}")
-
-        # Method 2: Use uploaded person image
-        if person_img is None and state.current_person and Path(state.current_person).exists():
-            person_img = Image.open(state.current_person)
-            logger.info("Using uploaded person image")
-
-        # Method 3: No person image available
-        if person_img is None:
-            raise Exception("无法获取人物图片：请连接 OBS 直播或上传人物照片")
-
-        # Process with VTON model (API only, no fallback)
-        result_img = vton_processor.process(
-            person_img, clothing_img, request.prompt
-        )
-
-        # Save result
-        output_id = str(uuid.uuid4())[:8]
-        output_path = OUTPUT_DIR / f"result_{output_id}.png"
-        result_img.save(str(output_path))
-
-        state.generated_image = str(output_path)
-        state.is_generating = False
-
-        # Convert to base64 for response
-        buffered = io.BytesIO()
-        result_img.save(buffered, format="PNG")
-        img_base64 = base64.b64encode(buffered.getvalue()).decode()
-
-        await broadcast_update("generation_complete", {
-            "image": img_base64,
-            "path": str(output_path),
-        })
-
-        return {
-            "status": "success",
-            "image": img_base64,
-            "path": str(output_path),
-        }
-
-    except Exception as e:
-        state.is_generating = False
-        logger.error(f"Generation error: {e}")
-        await broadcast_update("generation_error", {"error": str(e)})
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/realtime-tryon")
-async def realtime_tryon(request: dict):
-    """Apply real-time try-on to a single frame."""
-    import asyncio
-    import concurrent.futures
-
-    try:
-        frame_b64 = request.get("frame")
-        clothing_path = request.get("clothing")
-
-        if not frame_b64 or not clothing_path:
-            return {"error": "Missing frame or clothing"}
-
-        # Decode frame
-        if frame_b64.startswith("data:"):
-            frame_b64 = frame_b64.split(",", 1)[1]
-        frame_bytes = base64.b64decode(frame_b64)
-        frame_img = Image.open(io.BytesIO(frame_bytes))
-
-        # Load clothing
-        clothing_img = Image.open(clothing_path)
-
-        # Run AI processing in thread pool to avoid blocking
-        loop = asyncio.get_event_loop()
-        with concurrent.futures.ThreadPoolExecutor() as pool:
-            result_img = await loop.run_in_executor(
-                pool, realtime_tryon_processor.apply, frame_img, clothing_img
-            )
-
-        # Convert result to base64
-        buffered = io.BytesIO()
-        result_img.save(buffered, format="PNG")
-        result_b64 = base64.b64encode(buffered.getvalue()).decode()
-
-        return {"image": result_b64}
-
-    except Exception as e:
-        logger.error(f"Real-time try-on error: {e}")
-        return {"error": str(e)}
 
 
 # ──────────────────────────────────────────────
@@ -819,85 +660,6 @@ async def list_clothing():
 
 
 @app.get("/lucy")
-async def lucy_page():
-    """Serve the Lucy real-time page."""
-    html_path = STATIC_DIR / "lucy_realtime.html"
-    if html_path.exists():
-        return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
-    return HTMLResponse(content="<h1>Lucy Real-Time page not found</h1>")
-
-
-# ──────────────────────────────────────────────
-# Image Search API (Bing)
-# ──────────────────────────────────────────────
-BING_SEARCH_KEY = os.getenv("BING_SEARCH_KEY", "")
-
-@app.get("/api/search/images")
-async def search_images(query: str = "COSPLAY服装", count: int = 8):
-    """Search for clothing images using Bing Image Search API."""
-    if not BING_SEARCH_KEY:
-        # Return placeholder images if no API key
-        logger.warning("Bing Search API key not configured, returning placeholders")
-        return {
-            "status": "no_api_key",
-            "images": _get_placeholder_images(query, count),
-            "message": "请配置 BING_SEARCH_KEY 以启用真实图片搜索"
-        }
-
-    try:
-        # Call Bing Image Search API
-        search_url = "https://api.bing.microsoft.com/v7.0/images/search"
-        headers = {"Ocp-Apim-Subscription-Key": BING_SEARCH_KEY}
-        params = {
-            "q": query,
-            "count": count,
-            "imageType": "Photo",
-            "safeSearch": "Moderate",
-            "mkt": "zh-CN"
-        }
-
-        logger.info(f"Searching images: {query}")
-        response = requests.get(search_url, headers=headers, params=params, timeout=10)
-
-        if response.status_code == 200:
-            data = response.json()
-            images = []
-            for item in data.get("value", []):
-                images.append({
-                    "url": item.get("contentUrl", ""),
-                    "thumbnail": item.get("thumbnailUrl", ""),
-                    "title": item.get("name", ""),
-                    "source": item.get("hostPageDomainFriendlyName", ""),
-                    "width": item.get("width", 0),
-                    "height": item.get("height", 0),
-                })
-            return {"status": "success", "images": images}
-        else:
-            logger.error(f"Bing API error: {response.status_code}")
-            return {"status": "error", "images": _get_placeholder_images(query, count), "message": f"搜索失败: {response.status_code}"}
-
-    except Exception as e:
-        logger.error(f"Search error: {e}")
-        return {"status": "error", "images": _get_placeholder_images(query, count), "message": str(e)}
-
-
-def _get_placeholder_images(query: str, count: int) -> list:
-    """Generate placeholder images when API is not available."""
-    images = []
-    for i in range(count):
-        seed = f"{query}_{i}"
-        images.append({
-            "url": f"https://picsum.photos/seed/{seed}/400/560",
-            "thumbnail": f"https://picsum.photos/seed/{seed}/200/280",
-            "title": f"{query} {i+1}",
-            "source": "示例图片",
-            "width": 400,
-            "height": 560,
-        })
-    return images
-
-
-@app.post("/api/obs/start-virtual-cam")
 async def start_virtual_camera():
     """Start OBS Virtual Camera output."""
     success = obs_controller.set_virtual_camera_output(True)
@@ -925,10 +687,6 @@ async def get_image(image_type: str, filename: str):
     """Serve uploaded/generated images."""
     if image_type == "clothing":
         path = CLOTHING_DIR / filename
-    elif image_type == "person":
-        path = UPLOAD_DIR / filename
-    elif image_type == "output":
-        path = OUTPUT_DIR / filename
     else:
         raise HTTPException(status_code=400, detail="Invalid image type")
 
@@ -999,6 +757,16 @@ async def startup():
     logger.info(f"OBS WebSocket: {OBS_HOST}:{OBS_PORT}")
     logger.info(f"Static dir: {STATIC_DIR}")
 
+    # Log Lucy VTON realtime status
+    try:
+        from lucy_realtime import lucy_realtime
+        if lucy_realtime.is_configured():
+            logger.info("Lucy VTON realtime: READY (decart SDK + API key configured)")
+        else:
+            logger.warning("Lucy VTON realtime: NOT AVAILABLE (missing SDK or API key)")
+    except Exception as e:
+        logger.warning(f"Lucy VTON realtime: NOT AVAILABLE ({e})")
+
     # Try to connect to OBS on startup
     if OBS_AVAILABLE:
         try:
@@ -1010,6 +778,12 @@ async def startup():
 @app.on_event("shutdown")
 async def shutdown():
     obs_controller.disconnect()
+    try:
+        from lucy_realtime import lucy_realtime
+        if lucy_realtime.is_connected:
+            await lucy_realtime.disconnect()
+    except Exception:
+        pass
     logger.info("Server shutting down")
 
 

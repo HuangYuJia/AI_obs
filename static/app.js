@@ -13,11 +13,13 @@ const state = {
     currentMode: 'tryon',
     currentClothing: null,
     ws: null,
+    vtonWs: null,  // Lucy VTON real-time WebSocket
     obsPassword: localStorage.getItem('obsPassword') || 'a123456789',
 };
 
 const CONFIG = {
     WS_URL: `ws://${window.location.host}/ws`,
+    VTON_WS_URL: `ws://${window.location.host}/ws/vton`,
     API_BASE: '',
 };
 
@@ -36,7 +38,6 @@ const elements = {
 
     // Left panel - image gallery
     imageGrid: $('#imageGrid'),
-    btnRefreshImages: $('#btnRefreshImages'),
     btnAddLocal: $('#btnAddLocal'),
     localFileInput: $('#localFileInput'),
 
@@ -47,9 +48,7 @@ const elements = {
     previewPlaceholder: $('#previewPlaceholder'),
     aiBadge: $('#aiBadge'),
     generatedOverlay: $('#generatedOverlay'),
-    btnVolume: $('#btnVolume'),
     bottomPreviewImg: $('#bottomPreviewImg'),
-    bottomTimecode: $('#bottomTimecode'),
 
     // Right panel - clothing
     clothingDropArea: $('#clothingDropArea'),
@@ -63,7 +62,6 @@ const elements = {
     promptInput: $('#promptInput'),
     btnStart: $('#btnStart'),
     btnStop: $('#btnStop'),
-    btnVolume: $('#btnVolume'),
 
     // Overlays
     toastContainer: $('#toastContainer'),
@@ -195,8 +193,8 @@ function updateOBSStatus(connected) {
         // Clear bottom preview
         elements.bottomPreviewImg.style.display = 'none';
         elements.bottomPreviewImg.src = '';
-        const bottomPlaceholder = document.querySelector('.bottom-preview__placeholder');
-        if (bottomPlaceholder) bottomPlaceholder.style.display = 'flex';
+        const sidePlaceholder = document.querySelector('.side-preview__placeholder');
+        if (sidePlaceholder) sidePlaceholder.style.display = 'flex';
 
         // Clear AI generated overlay and badge
         if (elements.generatedOverlay) {
@@ -214,11 +212,12 @@ function updateOBSStatus(connected) {
 
 function updateLiveStatus(isLive) {
     state.isLive = isLive;
-    elements.liveIndicator.style.opacity = isLive ? '1' : '0.4';
-    if (isLive) {
-        // Live started
+    // LIVE is bright when either virtual camera is running OR OBS is connected
+    const shouldShow = isLive || state.obsConnected;
+    if (shouldShow) {
+        elements.liveIndicator.classList.add('connected');
     } else {
-        // Live stopped
+        elements.liveIndicator.classList.remove('connected');
     }
 }
 
@@ -236,6 +235,7 @@ async function connectOBS() {
         if (response.ok) {
             showToast('已连接OBS', 'success');
             updateOBSStatus(true);
+            updateLiveStatus(true);
             startOBSStream();
             // Save password for auto-reconnect
             localStorage.setItem('obsPassword', password);
@@ -252,8 +252,9 @@ async function connectOBS() {
 async function disconnectOBS() {
     try {
         await fetch('/api/obs/disconnect', { method: 'POST' });
-        stopOBSStream(); // Stop stream first to set flag
+        stopOBSStream();
         updateOBSStatus(false);
+        updateLiveStatus(false);
         // Clear saved password
         localStorage.removeItem('obsPassword');
         state.obsPassword = '';
@@ -372,11 +373,11 @@ function renderFrame(base64Image) {
         // Check again after image loaded
         if (!isOBSRendering) return;
 
-        // Bottom preview: always show original OBS feed
+        // Side preview: always show original OBS feed
         elements.bottomPreviewImg.src = `data:image/jpeg;base64,${base64Image}`;
         elements.bottomPreviewImg.style.display = 'block';
-        const bottomPlaceholder = document.querySelector('.bottom-preview__placeholder');
-        if (bottomPlaceholder) bottomPlaceholder.style.display = 'none';
+        const sidePlaceholder2 = document.querySelector('.side-preview__placeholder');
+        if (sidePlaceholder2) sidePlaceholder2.style.display = 'none';
 
         // Always show OBS feed in main canvas (background)
         elements.previewPlaceholder.style.display = 'none';
@@ -401,57 +402,119 @@ function renderFrame(base64Image) {
 let tryOnProcessing = false;
 let isSwitchingState = false;
 let lastProcessedClothing = null;
+let vtonWsConnected = false;
+
+function connectVTONWebSocket() {
+    // Prevent duplicate connections
+    if (state.vtonWs && (state.vtonWs.readyState === WebSocket.OPEN || state.vtonWs.readyState === WebSocket.CONNECTING)) {
+        console.log('[VTON] Already connected or connecting');
+        return;
+    }
+
+    const wsUrl = CONFIG.VTON_WS_URL;
+    console.log('[VTON] Connecting to', wsUrl);
+    state.vtonWs = new WebSocket(wsUrl);
+
+    state.vtonWs.onopen = () => {
+        console.log('[VTON] WebSocket connected');
+        // Send start message with clothing info
+        const userPrompt = elements.promptInput ? elements.promptInput.value.trim() : '';
+        const prompt = userPrompt || 'try on';
+        state.vtonWs.send(JSON.stringify({
+            type: 'start',
+            clothing: state.currentClothing,
+            prompt: prompt,
+        }));
+    };
+
+    state.vtonWs.onmessage = (event) => {
+        try {
+            const data = JSON.parse(event.data);
+            handleVTONMessage(data);
+        } catch (e) {
+            console.error('[VTON] Parse error:', e);
+        }
+    };
+
+    state.vtonWs.onerror = (e) => {
+        console.error('[VTON] WebSocket error:', e);
+        vtonWsConnected = false;
+        elements.aiBadge.textContent = 'AI 连接错误';
+        elements.aiBadge.style.display = 'block';
+    };
+
+    state.vtonWs.onclose = () => {
+        console.log('[VTON] WebSocket closed');
+        vtonWsConnected = false;
+        state.vtonWs = null;
+    };
+}
+
+function handleVTONMessage(data) {
+    switch (data.type) {
+        case 'connected':
+            console.log('[VTON] Session started:', data.message);
+            vtonWsConnected = true;
+            elements.aiBadge.textContent = 'AI 实时换装已连接';
+            elements.aiBadge.style.display = 'block';
+            break;
+        case 'frame':
+            // Received processed frame from Lucy VTON
+            if (data.image) {
+                // Restore canvas on first frame
+                if (elements.previewPlaceholder.style.display !== 'none') {
+                    elements.previewPlaceholder.style.display = 'none';
+                    elements.obsCanvas.style.display = 'block';
+                }
+                elements.generatedOverlay.src = `data:image/jpeg;base64,${data.image}`;
+                elements.generatedOverlay.style.display = 'block';
+                elements.aiBadge.textContent = 'AI 实时换装中';
+                elements.aiBadge.style.display = 'block';
+                tryOnProcessing = false;
+            }
+            break;
+        case 'updated':
+            console.log('[VTON] Clothing updated:', data.message);
+            break;
+        case 'disconnected':
+            console.log('[VTON] Session ended:', data.message);
+            vtonWsConnected = false;
+            break;
+        case 'error':
+            console.error('[VTON] Error:', data.message);
+            vtonWsConnected = false;
+            elements.aiBadge.textContent = 'AI 错误: ' + (data.message || '');
+            elements.aiBadge.style.display = 'block';
+            break;
+    }
+}
+
+function disconnectVTONWebSocket() {
+    if (state.vtonWs) {
+        try {
+            if (state.vtonWs.readyState === WebSocket.OPEN) {
+                state.vtonWs.send(JSON.stringify({ type: 'stop' }));
+            }
+            state.vtonWs.close();
+        } catch (e) {
+            console.error('[VTON] Error closing WebSocket:', e);
+        }
+        state.vtonWs = null;
+        vtonWsConnected = false;
+    }
+}
 
 async function applyRealTimeTryOn(base64Frame) {
     if (!state.currentClothing) {
         return;
     }
 
-    // Skip if already processing
-    if (tryOnProcessing) {
-        return;
-    }
-
-    // Only process if clothing changed or first time
-    if (lastProcessedClothing === state.currentClothing && elements.generatedOverlay.style.display !== 'none') {
-        return;
-    }
-
-    tryOnProcessing = true;
-    lastProcessedClothing = state.currentClothing;
-
-    try {
-        // Show processing indicator
-        elements.aiBadge.textContent = 'AI 处理中...';
-        elements.aiBadge.style.display = 'block';
-
-        const response = await fetch('/api/realtime-tryon', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                frame: base64Frame,
-                clothing: state.currentClothing,
-            }),
-        });
-
-        if (response.ok) {
-            const data = await response.json();
-            if (data.image) {
-                elements.generatedOverlay.src = `data:image/png;base64,${data.image}`;
-                elements.generatedOverlay.style.display = 'block';
-                elements.aiBadge.textContent = 'AI Generated';
-                elements.aiBadge.style.display = 'block';
-            } else {
-                elements.aiBadge.textContent = 'AI 生成失败';
-            }
-        } else {
-            elements.aiBadge.textContent = 'AI 错误';
-        }
-    } catch (e) {
-        console.error('Try-on error:', e);
-        elements.aiBadge.textContent = 'AI 错误';
-    } finally {
-        tryOnProcessing = false;
+    // Send frame via WebSocket if connected
+    if (state.vtonWs && state.vtonWs.readyState === WebSocket.OPEN && vtonWsConnected) {
+        state.vtonWs.send(JSON.stringify({
+            type: 'frame',
+            image: base64Frame,
+        }));
     }
 }
 
@@ -543,7 +606,7 @@ async function handleClothingFile(file) {
     formData.append('file', file);
 
     try {
-        const response = await fetch('/api/clothing/upload', {
+        const response = await fetch('/api/person/upload', {
             method: 'POST',
             body: formData,
         });
@@ -555,6 +618,14 @@ async function handleClothingFile(file) {
             tryOnProcessing = false; // Reset processing flag
             showToast('服装图片已上传', 'success');
             updateStartButton();
+
+            // Update VTON session if actively connected
+            if (state.vtonWs && state.vtonWs.readyState === WebSocket.OPEN && vtonWsConnected) {
+                state.vtonWs.send(JSON.stringify({
+                    type: 'update',
+                    clothing: data.path,
+                }));
+            }
         } else {
             showToast('上传失败', 'error');
         }
@@ -575,30 +646,6 @@ function clearClothing() {
 // ──────────────────────────────────────────────
 // Search Image Drag to Clothing
 // ──────────────────────────────────────────────
-function initSearchDragToClothing() {
-    // Make search result images draggable to clothing area
-    $$('.image-card').forEach(card => {
-        card.addEventListener('dragstart', (e) => {
-            const imgSrc = card.querySelector('img').src;
-            e.dataTransfer.setData('text/plain', imgSrc);
-            e.dataTransfer.setData('application/x-image-url', imgSrc);
-        });
-    });
-
-    // Handle drop from search to clothing area
-    elements.clothingDropArea.addEventListener('dragover', (e) => {
-        e.preventDefault();
-    });
-
-    elements.clothingDropArea.addEventListener('drop', (e) => {
-        const imageUrl = e.dataTransfer.getData('text/plain') ||
-                         e.dataTransfer.getData('application/x-image-url');
-
-        if (imageUrl) {
-            handleClothingUrl(imageUrl);
-        }
-    });
-}
 
 async function handleClothingUrl(url) {
     try {
@@ -652,45 +699,11 @@ function initPromptTags() {
 // ──────────────────────────────────────────────
 let localImages = []; // Track locally added images
 
-async function searchImages(query = null) {
-    if (!query) {
-        query = 'COSPLAY cosplay';
-    }
-
-    try {
-        const response = await fetch(`/api/search/images?query=${encodeURIComponent(query)}&count=8`);
-        const data = await response.json();
-
-        if (data.images && data.images.length > 0) {
-            // Keep local images, add search results
-            renderImageGrid(data.images, false);
-        }
-
-        // Show message if any (e.g., "请配置 BING_SEARCH_KEY")
-        if (data.message) {
-            showToast(data.message, 'info');
-        }
-    } catch (e) {
-        console.error('Search error:', e);
-        showToast('搜索失败: ' + e.message, 'error');
-    }
-}
-
-function renderImageGrid(apiImages = [], append = false) {
+function renderImageGrid() {
     const grid = elements.imageGrid;
-
-    if (!append) {
-        // Clear only API images, keep local ones
-        grid.innerHTML = '';
-        // Re-add local images first
-        localImages.forEach(img => {
-            grid.appendChild(createImageCard(img.url, img.title, img.source, true));
-        });
-    }
-
-    // Add API images
-    apiImages.forEach(img => {
-        grid.appendChild(createImageCard(img.thumbnail || img.url, img.title, img.source, false));
+    grid.innerHTML = '';
+    localImages.forEach(img => {
+        grid.appendChild(createImageCard(img.url, img.title, img.source, true));
     });
 }
 
@@ -726,8 +739,21 @@ function createImageCard(src, title, source, isLocal = false) {
     if (isLocal) {
         div.querySelector('.image-card__delete').addEventListener('click', (e) => {
             e.stopPropagation();
-            localImages = localImages.filter(img => img.url !== src);
-            div.remove();
+            if (!confirm('确定要删除这张图片吗？')) return;
+
+            // Extract filename from src URL
+            const filename = src.split('/').pop();
+            fetch(`/api/clothing/${filename}`, { method: 'DELETE' })
+                .then(res => {
+                    if (res.ok) {
+                        localImages = localImages.filter(img => img.url !== src);
+                        div.remove();
+                        showToast('图片已删除', 'success');
+                    } else {
+                        showToast('删除失败', 'error');
+                    }
+                })
+                .catch(() => showToast('删除失败', 'error'));
         });
     }
 
@@ -735,33 +761,32 @@ function createImageCard(src, title, source, isLocal = false) {
 }
 
 function addLocalImages(files) {
-    Array.from(files).forEach(file => {
+    Array.from(files).forEach(async (file) => {
         if (!file.type.startsWith('image/')) return;
 
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            const url = e.target.result;
-            const img = {
-                url: url,
-                title: file.name.replace(/\.[^/.]+$/, ''),
-                source: '本地'
-            };
-            localImages.push(img);
-
-            // Add to grid
-            const card = createImageCard(url, img.title, img.source, true);
-            elements.imageGrid.prepend(card);
-        };
-        reader.readAsDataURL(file);
+        // Upload to clothing directory
+        const formData = new FormData();
+        formData.append('file', file);
+        try {
+            const response = await fetch('/api/clothing/upload', {
+                method: 'POST',
+                body: formData,
+            });
+            if (response.ok) {
+                const data = await response.json();
+                const src = `/api/image/clothing/${data.filename}`;
+                const title = file.name.replace(/\.[^/.]+$/, '');
+                localImages.push({ url: src, title: title, source: '本地' });
+                renderImageGrid();
+                showToast('图片已添加到图库', 'success');
+            }
+        } catch (e) {
+            console.error('Upload error:', e);
+        }
     });
 }
 
 function initImageGallery() {
-    // Refresh button
-    elements.btnRefreshImages.addEventListener('click', () => {
-        searchImages();
-    });
-
     // Add local button
     elements.btnAddLocal.addEventListener('click', () => {
         elements.localFileInput.click();
@@ -771,21 +796,57 @@ function initImageGallery() {
     elements.localFileInput.addEventListener('change', (e) => {
         if (e.target.files.length > 0) {
             addLocalImages(e.target.files);
-            e.target.value = ''; // Reset input
+            e.target.value = '';
         }
     });
 
-    // Initial load
-    searchImages();
+    // Load local clothing
+    loadLocalClothing();
+}
+
+async function loadLocalClothing() {
+    try {
+        const response = await fetch('/api/clothing/list');
+        const data = await response.json();
+        if (data.clothing && data.clothing.length > 0) {
+            data.clothing.forEach(item => {
+                const src = `/api/image/clothing/${item.filename}`;
+                const title = item.filename.replace(/\.[^.]+$/, '');
+                localImages.push({ url: src, title: title, source: '本地' });
+            });
+            renderImageGrid();
+        }
+    } catch (e) {
+        console.error('Failed to load local clothing:', e);
+    }
 }
 
 // ──────────────────────────────────────────────
 // Generate (Virtual Try-On)
 // ──────────────────────────────────────────────
+function updateSteps() {
+    const step1 = document.getElementById('step1');
+    const step2 = document.getElementById('step2');
+    if (!step1 || !step2) return;
+
+    if (state.isGenerating) {
+        // AI换装中：步骤2激活，步骤1未激活
+        step1.className = 'step';
+        step2.className = 'step active';
+    } else {
+        // 未换装：步骤1激活，步骤2未激活
+        step1.className = 'step active';
+        step2.className = 'step';
+    }
+}
+
 function updateStartButton() {
     // Both clothing image and OBS connection are required
     const canStart = state.currentClothing && state.obsConnected;
     elements.btnStart.disabled = !canStart;
+
+    // Update steps
+    updateSteps();
 
     // Update tooltip
     if (!state.currentClothing) {
@@ -816,14 +877,19 @@ async function startGeneration() {
     elements.btnStart.disabled = true;
     elements.btnStop.disabled = true;
 
-    // Clear previous AI result immediately
-    if (elements.generatedOverlay) {
-        elements.generatedOverlay.style.display = 'none';
-        elements.generatedOverlay.src = '';
-    }
+    // Show "connecting" state
     if (elements.aiBadge) {
-        elements.aiBadge.style.display = 'none';
+        elements.aiBadge.textContent = 'AI 连接中...';
+        elements.aiBadge.style.display = 'block';
     }
+    // Hide OBS canvas during connection to avoid green screen flash
+    elements.obsCanvas.style.display = 'none';
+    elements.generatedOverlay.style.display = 'none';
+    elements.previewPlaceholder.style.display = 'flex';
+    elements.previewPlaceholder.innerHTML = `
+        <i class="fas fa-spinner fa-spin"></i>
+        <p>AI 换装连接中...</p>
+    `;
 
     // Enable real-time try-on mode
     isRealTimeTryOn = true;
@@ -832,7 +898,11 @@ async function startGeneration() {
     tryOnProcessing = false;  // Reset processing flag
     elements.btnStart.style.display = 'none';
     elements.btnStop.style.display = '';
+    updateSteps();
     showToast('实时换装已开启', 'success');
+
+    // Connect VTON WebSocket for real-time streaming
+    connectVTONWebSocket();
 
     // Unlock after a short delay
     setTimeout(() => {
@@ -857,8 +927,12 @@ async function stopGeneration() {
     lastProcessedClothing = null;  // Reset so next start will trigger new generation
     lastClothingPath = null;
 
+    // Disconnect VTON WebSocket
+    disconnectVTONWebSocket();
+
     elements.btnStart.style.display = '';
     elements.btnStop.style.display = 'none';
+    updateSteps();
 
     // Hide AI overlay and badge - CLEAR EVERYTHING
     if (elements.generatedOverlay) {
@@ -891,31 +965,6 @@ async function stopGeneration() {
 // ──────────────────────────────────────────────
 // OBS Virtual Camera Controls
 // ──────────────────────────────────────────────
-async function startVirtualCamera() {
-    try {
-        const response = await fetch('/api/obs/start-virtual-cam', { method: 'POST' });
-        if (response.ok) {
-            updateLiveStatus(true);
-            showToast('虚拟摄像头已启动', 'success');
-        } else {
-            showToast('虚拟摄像头启动失败', 'error');
-        }
-    } catch (e) {
-        showToast('错误: ' + e.message, 'error');
-    }
-}
-
-async function stopVirtualCamera() {
-    try {
-        const response = await fetch('/api/obs/stop-virtual-cam', { method: 'POST' });
-        if (response.ok) {
-            updateLiveStatus(false);
-            showToast('バーチャルカメラを停止しました', 'info');
-        }
-    } catch (e) {
-        showToast('错误: ' + e.message, 'error');
-    }
-}
 
 // ──────────────────────────────────────────────
 // Event Listeners
@@ -928,18 +977,6 @@ function initEventListeners() {
     // Start/Stop buttons
     elements.btnStart.addEventListener('click', startGeneration);
     elements.btnStop.addEventListener('click', stopGeneration);
-
-    // Volume button (toggle)
-    elements.btnVolume.addEventListener('click', () => {
-        const icon = elements.btnVolume.querySelector('i');
-        if (icon.classList.contains('fa-volume-up')) {
-            icon.className = 'fas fa-volume-mute';
-            elements.obsVideo.muted = true;
-        } else {
-            icon.className = 'fas fa-volume-up';
-            elements.obsVideo.muted = false;
-        }
-    });
 }
 
 // ──────────────────────────────────────────────
@@ -958,41 +995,6 @@ function initGlobalDragDrop() {
     });
 }
 
-// ──────────────────────────────────────────────
-// Category Tabs
-// ──────────────────────────────────────────────
-function initCategoryTabs() {
-    $$('.category-tabs .tab').forEach(tab => {
-        tab.addEventListener('click', () => {
-            $$('.category-tabs .tab').forEach(t => t.classList.remove('active'));
-            tab.classList.add('active');
-        });
-    });
-}
-
-// ──────────────────────────────────────────────
-// Search Box
-// ──────────────────────────────────────────────
-function initSearchBox() {
-    const searchInput = $('#searchInput');
-    const btnSearch = $('#btnSearch');
-
-    btnSearch.addEventListener('click', () => {
-        performSearch(searchInput.value);
-    });
-
-    searchInput.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') {
-            performSearch(searchInput.value);
-        }
-    });
-}
-
-function performSearch(query) {
-    if (!query.trim()) return;
-    showToast(`搜索: ${query}`, 'info');
-    // In production, this would call an API to search for images
-}
 
 // ──────────────────────────────────────────────
 // Initialization

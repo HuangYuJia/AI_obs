@@ -8,12 +8,4 @@ websockets>=12.0
 pydantic>=2.0.0
 python-dotenv>=1.0.0
 requests>=2.31.0
-
-# OBS WebSocket (optional - for OBS integration)
-# obsws-python>=1.0.0
-
-# AI/ML (optional - for local virtual try-on)
-# torch>=2.0.0
-# torchvision>=0.15.0
-# diffusers>=0.21.0
-# transformers>=4.30.0
+decart[realtime]>=0.1.1
