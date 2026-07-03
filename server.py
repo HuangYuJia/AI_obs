@@ -290,9 +290,10 @@ class OBSController:
                 "GetSourceScreenshot",
                 {
                     "sourceName": scene_name,
-                    "imageFormat": "png",
-                    "imageWidth": 1920,
-                    "imageHeight": 1080,
+                    "imageFormat": "jpeg",
+                    "imageWidth": 1280,
+                    "imageHeight": 720,
+                    "imageCompressionQuality": 70
                 }
             )
             # Remove data:image/png;base64, prefix if present
@@ -372,7 +373,7 @@ async def websocket_vton(websocket: WebSocket):
         sent_frame_count += 1
         try:
             buffered = io.BytesIO()
-            frame_img.save(buffered, format="PNG")
+            frame_img.save(buffered, format="JPEG", quality=75)
             frame_b64 = base64.b64encode(buffered.getvalue()).decode()
             await websocket.send_json({"type": "frame", "image": frame_b64})
             if sent_frame_count == 1 or sent_frame_count % 10 == 0:
