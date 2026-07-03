@@ -8,27 +8,6 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
-    <!-- ─── Top Status Bar ─── -->
-    <header class="top-bar">
-        <div class="top-bar__left">
-            <div class="live-indicator" id="liveIndicator">
-                <span class="live-dot"></span>
-                <span class="live-text">LIVE</span>
-            </div>
-        </div>
-        <div class="top-bar__right">
-            <div class="obs-connect-group">
-                <input type="password" id="obsPassword" class="obs-password-input" placeholder="OBS WebSocket密码" title="OBS WebSocket密码" value="a123456789">
-                <button class="btn btn--small btn--primary" id="btnConnectOBS" title="Connect to OBS">
-                    <i class="fas fa-link"></i> 连接
-                </button>
-            </div>
-            <button class="btn btn--small btn--danger" id="btnDisconnectOBS" title="Disconnect from OBS" style="display:none;">
-                <i class="fas fa-unlink"></i> 断开
-            </button>
-        </div>
-    </header>
-
     <!-- ─── Main Layout ─── -->
     <main class="main-layout">
         <!-- ═══ Left Panel: Image Gallery ═══ -->
@@ -54,6 +33,11 @@
             <!-- Main Preview Area -->
             <div class="main-preview">
                 <div class="main-preview__video" id="mainPreview">
+                    <!-- LIVE Indicator -->
+                    <div class="live-indicator" id="liveIndicator">
+                        <span class="live-dot"></span>
+                        <span class="live-text">LIVE</span>
+                    </div>
                     <!-- OBS Stream will be displayed here -->
                     <video id="obsVideo" autoplay muted playsinline></video>
                     <canvas id="obsCanvas" style="display:none;"></canvas>
@@ -68,47 +52,90 @@
                     <!-- Generated Image Overlay -->
                     <img id="generatedOverlay" class="generated-overlay" style="display:none;" alt="Generated">
                 </div>
+
+                <!-- Original Feed Preview -->
+                <div class="bottom-preview">
+                    <div class="bottom-preview__header">
+                        <i class="fas fa-image"></i>
+                        <span>原始画面</span>
+                    </div>
+                    <div class="bottom-preview__video">
+                        <img id="bottomPreviewImg" src="" alt="原始画面" style="display:none;">
+                        <div class="bottom-preview__placeholder">
+                            <i class="fas fa-tv"></i>
+                            <span>未连接</span>
+                        </div>
+                    </div>
+                </div>
             </div>
         </section>
 
-        <!-- ═══ Right Panel: OBS 虚拟摄像头 Controls ═══ -->
+        <!-- ═══ Right Panel: Controls ═══ -->
         <aside class="panel panel--right">
             <div class="panel__header">
-                <h3 class="panel__title">
-                    <i class="fas fa-camera"></i> OBS 虚拟摄像头
-                </h3>
-            </div>
-
-            <!-- Step Navigation -->
-            <div class="step-nav">
-                <div class="step active" data-step="1" id="step1">
-                    <span class="step__number">1</span>
-                    <span class="step__label">上传服装</span>
-                </div>
-                <div class="step__arrow">→</div>
-                <div class="step" data-step="2" id="step2">
-                    <span class="step__number">2</span>
-                    <span class="step__label">AI 换装</span>
+                <div class="panel__header-text">
+                    <h3 class="panel__title">
+                        <i class="fas fa-camera"></i> Lucy实时美少女直播
+                    </h3>
+                    <p class="panel__subtitle">摄像头确认 — 转换为美少女 — OBS直播</p>
                 </div>
             </div>
 
-            <!-- Mode Selection -->
-            <div class="mode-section">
-                <label class="mode-label">换装模式</label>
-                <div class="mode-options">
-                    <button class="mode-btn active" data-mode="tryon" style="flex: 1;">
-                        <i class="fas fa-tshirt"></i>
-                        <span>AI 服装换装</span>
-                    </button>
+            <!-- API Key Input -->
+            <div class="api-key-section">
+                <div class="section__header">
+                    <i class="fas fa-key"></i>
+                    <span>Decart API 密钥</span>
+                </div>
+                <div class="api-key-input-group">
+                    <input type="password" id="decartApiKey" class="api-key-input" placeholder="输入 Decart API Key" value="dct_dttt_xBOUFnMmCxQCtrfDXdaiivZsHGCLVPDFWrunSfcDogeHagegXaIMpGLOJuHzfBAj">
+                    <small class="api-key-hint">保存到终端。获取：<a href="https://platform.decart.ai/" target="_blank">https://platform.decart.ai/</a></small>
                 </div>
             </div>
 
-            <!-- Clothing Drag & Drop Area -->
-            <div class="clothing-section">
-                <label class="mode-label">
-                    <i class="fas fa-tshirt"></i> 服装图片
-                    <small>上传要穿的衣服</small>
-                </label>
+            <!-- Camera Selection Section -->
+            <div class="section">
+                <div class="section__header">
+                    <span class="step-badge">STEP 1</span>
+                    <span>相机确认</span>
+                </div>
+                <div class="camera-preview-btn" id="btnCameraPreview">
+                    <i class="fas fa-play-circle"></i>
+                    <span>确认相机（预览）</span>
+                </div>
+                <div class="camera-select-group">
+                    <label class="camera-label">使用的相机</label>
+                    <div class="camera-select-wrapper">
+                        <select id="cameraSelect" class="camera-select">
+                            <option value="obs" selected>OBS 虚拟摄像头</option>
+                        </select>
+                        <i class="fas fa-chevron-down"></i>
+                    </div>
+                    <small class="camera-hint">请通过中央的大画面确认是否为正确的摄像头</small>
+                </div>
+            </div>
+
+            <!-- Mode Selection Section -->
+            <div class="section">
+                <div class="section__header">
+                    <span class="step-badge">STEP 2</span>
+                    <span>模式</span>
+                </div>
+                <div class="mode-select-group">
+                    <label class="camera-label">选择转换模式</label>
+                    <div class="camera-select-wrapper">
+                        <select id="modeSelect" class="camera-select">
+                            <option value="vton" selected>服装试穿/换装 (lucy-vton-3)</option>
+                        </select>
+                        <i class="fas fa-chevron-down"></i>
+                    </div>
+                    <small class="camera-hint">服装画像=想要试穿的衣服，能拍摄到人物全身的相机位置</small>
+                    <small class="camera-hint">会保持稳定的服装图像（想要试穿的衣服·拖放）</small>
+                </div>
+            </div>
+
+            <!-- Clothing Section -->
+            <div class="section">
                 <div class="drag-drop-area" id="clothingDropArea">
                     <div class="drag-drop-area__content" id="clothingDropContent">
                         <i class="fas fa-cloud-upload-alt"></i>
@@ -125,48 +152,60 @@
                 </div>
             </div>
 
-            <!-- Prompt Input -->
-            <div class="prompt-section">
-                <label class="mode-label">
-                    <i class="fas fa-comment-dots"></i> 提示词
-                    <small>可选：描述想要的效果</small>
-                </label>
-                <textarea id="promptInput" class="prompt-textarea" placeholder="描述想要的效果...">Substitute the current clothing with the clothing from the reference image</textarea>
+            <!-- Prompt Section -->
+            <div class="section">
+                <div class="section__header">
+                    <i class="fas fa-comment-dots"></i>
+                    <span>提示词（文章中的指定）</span>
+                </div>
+                <textarea id="promptInput" class="prompt-textarea" placeholder="描述想要的效果...">beautiful realistic woman, photorealistic，large bust, busty curvy figure，attractive adult woman, detailed skin texture，natural lighting，glamour portrait，high detail，8k</textarea>
                 <div class="prompt-tags">
                     <button class="prompt-tag" data-prompt="可爱少女">可爱少女</button>
                     <button class="prompt-tag" data-prompt="清纯">清纯</button>
                     <button class="prompt-tag" data-prompt="偶像">偶像</button>
-                    <button class="prompt-tag" data-prompt="Vtuber">Vtuber</button>
+                    <button class="prompt-tag" data-prompt="虚拟主播">虚拟主播</button>
                     <button class="prompt-tag" data-prompt="写实美女">写实美女</button>
-                    <button class="prompt-tag" data-prompt="清纯">清纯</button>
                     <button class="prompt-tag" data-prompt="写真">写真</button>
                 </div>
-                <p class="prompt-note">图片确定外观，提示词稳定姿势。</p>
             </div>
 
             <!-- Action Buttons -->
-            <div class="action-section">
-                <button class="btn btn--primary btn--large" id="btnStart" disabled>
-                    <i class="fas fa-play"></i> 开始换装
-                </button>
-                <div class="action-secondary">
-                    <button class="btn btn--danger btn--small" id="btnStop" style="display:none;">
-                        <i class="fas fa-stop"></i> 停止
+            <div class="section">
+                <div class="section__header">
+                    <span class="step-badge">STEP 3</span>
+                    <span>开始</span>
+                </div>
+                <div class="action-section">
+                    <button class="btn btn--primary btn--large" id="btnStart" disabled>
+                        <i class="fas fa-play"></i> 开始换装
                     </button>
+                    <div class="action-secondary">
+                        <button class="btn btn--danger btn--small" id="btnStop" style="display:none;">
+                            <i class="fas fa-stop"></i> 停止
+                        </button>
+                    </div>
                 </div>
             </div>
 
-            <!-- Original Feed Preview -->
-            <div class="side-preview">
-                <label class="mode-label">
-                    <i class="fas fa-image"></i> 原始画面
-                </label>
-                <div class="side-preview__video">
-                    <img id="bottomPreviewImg" src="" alt="原始画面" style="display:none;">
-                    <div class="side-preview__placeholder">
-                        <i class="fas fa-tv"></i>
-                        <span>未连接</span>
-                    </div>
+            <!-- OBS Live Section -->
+            <div class="section">
+                <div class="section__header">
+                    <i class="fas fa-broadcast-tower"></i>
+                    <span>直播（OBS）</span>
+                </div>
+                <div class="obs-live-controls">
+                    <button class="btn btn--outline btn--small" id="btnShowOutput" style="width: 100%; margin-bottom: 6px;">
+                        <i class="fas fa-eye"></i> 将输出(8444)显示在本页
+                    </button>
+                    <button class="btn btn--outline btn--small" id="btnOpenOutput" style="width: 100%; margin-bottom: 6px;">
+                        <i class="fas fa-external-link-alt"></i> 在新窗口中打开输出页面
+                    </button>
+                    <button class="btn btn--outline btn--small" id="btnHideCamera" style="width: 100%; margin-bottom: 6px;">
+                        <i class="fas fa-eye-slash"></i> 隐藏右下角摄像头
+                    </button>
+                    <button class="btn btn--outline btn--small" id="btnCleanMode" style="width: 100%;">
+                        <i class="fas fa-tv"></i> 清洁显示模式(仅输出)
+                    </button>
                 </div>
             </div>
         </aside>

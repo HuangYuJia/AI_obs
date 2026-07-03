@@ -391,6 +391,12 @@ async def websocket_vton(websocket: WebSocket):
                 # Start a new VTON session with clothing
                 clothing_path = data.get("clothing", "")
                 prompt = data.get("prompt", "try on")
+                api_key = data.get("api_key", "")
+
+                # Update API key if provided from frontend
+                if api_key:
+                    lucy_realtime.api_key = api_key
+                    logger.info(f"Using API key from frontend: {api_key[:20]}...")
 
                 # Load clothing image bytes
                 image_bytes = None

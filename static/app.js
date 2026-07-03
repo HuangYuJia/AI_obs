@@ -32,9 +32,6 @@ const $$ = (sel) => document.querySelectorAll(sel);
 const elements = {
     // Top bar
     liveIndicator: $('#liveIndicator'),
-    obsPassword: $('#obsPassword'),
-    btnConnectOBS: $('#btnConnectOBS'),
-    btnDisconnectOBS: $('#btnDisconnectOBS'),
 
     // Left panel - image gallery
     imageGrid: $('#imageGrid'),
@@ -171,8 +168,6 @@ function updateStatus(data) {
 function updateOBSStatus(connected) {
     state.obsConnected = connected;
     elements.liveIndicator.classList.toggle('connected', connected);
-    elements.btnConnectOBS.style.display = connected ? 'none' : '';
-    elements.btnDisconnectOBS.style.display = connected ? '' : 'none';
 
     if (connected) {
         elements.previewPlaceholder.innerHTML = `
@@ -193,8 +188,8 @@ function updateOBSStatus(connected) {
         // Clear bottom preview
         elements.bottomPreviewImg.style.display = 'none';
         elements.bottomPreviewImg.src = '';
-        const sidePlaceholder = document.querySelector('.side-preview__placeholder');
-        if (sidePlaceholder) sidePlaceholder.style.display = 'flex';
+        const bottomPlaceholder = document.querySelector('.bottom-preview__placeholder');
+        if (bottomPlaceholder) bottomPlaceholder.style.display = 'flex';
 
         // Clear AI generated overlay and badge
         if (elements.generatedOverlay) {
@@ -225,7 +220,7 @@ function updateLiveStatus(isLive) {
 // OBS Connection
 // ──────────────────────────────────────────────
 async function connectOBS() {
-    const password = document.getElementById('obsPassword').value;
+    const password = state.obsPassword || 'a123456789';
 
     try {
         const response = await fetch(`/api/obs/connect?password=${encodeURIComponent(password)}`, {
@@ -376,8 +371,8 @@ function renderFrame(base64Image) {
         // Side preview: always show original OBS feed
         elements.bottomPreviewImg.src = `data:image/jpeg;base64,${base64Image}`;
         elements.bottomPreviewImg.style.display = 'block';
-        const sidePlaceholder2 = document.querySelector('.side-preview__placeholder');
-        if (sidePlaceholder2) sidePlaceholder2.style.display = 'none';
+        const bottomPlaceholder2 = document.querySelector('.bottom-preview__placeholder');
+        if (bottomPlaceholder2) bottomPlaceholder2.style.display = 'none';
 
         // Always show OBS feed in main canvas (background)
         elements.previewPlaceholder.style.display = 'none';
@@ -417,13 +412,15 @@ function connectVTONWebSocket() {
 
     state.vtonWs.onopen = () => {
         console.log('[VTON] WebSocket connected');
-        // Send start message with clothing info
+        // Send start message with clothing info and API key
         const userPrompt = elements.promptInput ? elements.promptInput.value.trim() : '';
         const prompt = userPrompt || 'try on';
+        const apiKey = document.getElementById('decartApiKey') ? document.getElementById('decartApiKey').value : '';
         state.vtonWs.send(JSON.stringify({
             type: 'start',
             clothing: state.currentClothing,
             prompt: prompt,
+            api_key: apiKey,
         }));
     };
 
@@ -970,9 +967,13 @@ async function stopGeneration() {
 // Event Listeners
 // ──────────────────────────────────────────────
 function initEventListeners() {
-    // OBS Connection
-    elements.btnConnectOBS.addEventListener('click', connectOBS);
-    elements.btnDisconnectOBS.addEventListener('click', disconnectOBS);
+    // Camera connection button (right panel)
+    const btnConnectCamera = document.getElementById('btnConnectCamera');
+    if (btnConnectCamera) {
+        btnConnectCamera.addEventListener('click', () => {
+            connectOBS();
+        });
+    }
 
     // Start/Stop buttons
     elements.btnStart.addEventListener('click', startGeneration);
@@ -1018,12 +1019,11 @@ function init() {
         .then(data => updateStatus(data))
         .catch(e => console.log('Could not fetch initial status'));
 
-    // Auto-reconnect OBS if password was saved
-    if (state.obsPassword) {
-        document.getElementById('obsPassword').value = state.obsPassword;
-        console.log('Auto-reconnecting OBS...');
-        connectOBS();
-    }
+    // Auto-reconnect OBS with default password
+    const defaultPassword = 'a123456789';
+    state.obsPassword = defaultPassword;
+    console.log('Auto-reconnecting OBS...');
+    connectOBS();
 
     console.log('OBS Virtual Try-On - Ready');
 }
