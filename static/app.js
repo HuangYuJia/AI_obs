@@ -397,8 +397,9 @@ function renderFrame(base64Image) {
         canvas.height = img.height;
         ctx.drawImage(img, 0, 0);
 
-        // If real-time try-on is active, send frame for AI processing
-        if (isRealTimeTryOn && state.currentClothing) {
+        // If real-time processing is active, send frame for AI processing
+        const hasReference = state.currentMode === 'transform' ? state.currentReferenceImage : state.currentClothing;
+        if (isRealTimeTryOn && hasReference) {
             applyRealTimeTryOn(base64Image);
         }
     };
@@ -412,7 +413,6 @@ let tryOnProcessing = false;
 let isSwitchingState = false;
 let lastProcessedClothing = null;
 let vtonWsConnected = false;
-let isTransformProcessing = false;
 
 function connectVTONWebSocket() {
     // Prevent duplicate connections
@@ -427,13 +427,14 @@ function connectVTONWebSocket() {
 
     state.vtonWs.onopen = () => {
         console.log('[VTON] WebSocket connected');
-        // Send start message with clothing info and API key
         const userPrompt = elements.promptInput ? elements.promptInput.value.trim() : '';
         const prompt = userPrompt || 'try on';
         const apiKey = document.getElementById('decartApiKey') ? document.getElementById('decartApiKey').value : '';
+        const isTransform = state.currentMode === 'transform';
         state.vtonWs.send(JSON.stringify({
             type: 'start',
-            clothing: state.currentClothing,
+            mode: state.currentMode,
+            clothing: isTransform ? state.currentReferenceImage : state.currentClothing,
             prompt: prompt,
             api_key: apiKey,
         }));
@@ -548,79 +549,6 @@ function showGeneratedImage(base64Image) {
     elements.previewPlaceholder.style.display = 'none';
 }
 
-// ──────────────────────────────────────────────
-// Transform Mode (lucy-2.1 REST API)
-// ──────────────────────────────────────────────
-async function startTransformLoop() {
-    if (!isTransformProcessing) return;
-
-    if (elements.aiBadge) {
-        elements.aiBadge.textContent = 'AI 人物变换中...';
-        elements.aiBadge.style.display = 'block';
-    }
-
-    while (isTransformProcessing) {
-        try {
-            // Capture current OBS frame
-            const canvas = elements.obsCanvas;
-            if (canvas.width === 0 || canvas.height === 0) {
-                await new Promise(r => setTimeout(r, 1000));
-                continue;
-            }
-
-            const frameBase64 = canvas.toDataURL('image/jpeg', 0.7).split(',')[1];
-
-            // Show processing state
-            if (elements.aiBadge) {
-                elements.aiBadge.textContent = 'AI 处理中...';
-            }
-
-            const prompt = elements.promptInput ? elements.promptInput.value.trim() : '';
-            const response = await fetch('/api/lucy/process', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    frame: frameBase64,
-                    clothing: state.currentReferenceImage,
-                    prompt: prompt || 'Transform the person to match the reference image',
-                }),
-            });
-
-            if (!isTransformProcessing) break;
-
-            if (response.ok) {
-                const data = await response.json();
-                if (data.image) {
-                    showGeneratedImage(data.image);
-                    if (elements.aiBadge) {
-                        elements.aiBadge.textContent = 'AI 人物变换';
-                    }
-                } else if (data.error) {
-                    console.error('[Transform] Error:', data.error);
-                    if (elements.aiBadge) {
-                        elements.aiBadge.textContent = 'AI 处理错误';
-                    }
-                }
-            } else {
-                console.error('[Transform] HTTP error:', response.status);
-                if (elements.aiBadge) {
-                    elements.aiBadge.textContent = 'AI 请求错误';
-                }
-            }
-        } catch (e) {
-            if (!isTransformProcessing) break;
-            console.error('[Transform] Error:', e);
-            if (elements.aiBadge) {
-                elements.aiBadge.textContent = 'AI 连接错误';
-            }
-        }
-
-        // Wait before next frame (avoid overloading the API)
-        if (isTransformProcessing) {
-            await new Promise(r => setTimeout(r, 2000));
-        }
-    }
-}
 
 // ──────────────────────────────────────────────
 // Clothing Drag & Drop
@@ -802,8 +730,16 @@ async function handleReferenceFile(file) {
         if (response.ok) {
             const data = await response.json();
             state.currentReferenceImage = data.path;
-            showToast('参照画像をアップロードしました', 'success');
+            showToast('参照画像已上传', 'success');
             updateStartButton();
+
+            // Update VTON session if actively connected in transform mode
+            if (state.currentMode === 'transform' && state.vtonWs && state.vtonWs.readyState === WebSocket.OPEN && vtonWsConnected) {
+                state.vtonWs.send(JSON.stringify({
+                    type: 'update',
+                    clothing: data.path,
+                }));
+            }
         } else {
             showToast('上传失败', 'error');
         }
@@ -1118,12 +1054,11 @@ async function startGeneration() {
         lastProcessedClothing = null;
         tryOnProcessing = false;
         showToast('实时换装已开启', 'success');
-        connectVTONWebSocket();
     } else if (isTransform) {
-        isTransformProcessing = true;
+        isRealTimeTryOn = true;
         showToast('人物变换已开启', 'success');
-        startTransformLoop();
     }
+    connectVTONWebSocket();
 
     setTimeout(() => {
         isSwitchingState = false;
@@ -1140,7 +1075,6 @@ async function stopGeneration() {
 
     // Stop both modes
     isRealTimeTryOn = false;
-    isTransformProcessing = false;
     state.isGenerating = false;
     tryOnProcessing = false;
     lastProcessedClothing = null;

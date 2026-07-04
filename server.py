@@ -388,17 +388,21 @@ async def websocket_vton(websocket: WebSocket):
             msg_type = data.get("type")
 
             if msg_type == "start":
-                # Start a new VTON session with clothing
+                # Start a new VTON or transform session
                 clothing_path = data.get("clothing", "")
                 prompt = data.get("prompt", "try on")
                 api_key = data.get("api_key", "")
+                mode = data.get("mode", "vton")
 
                 # Update API key if provided from frontend
                 if api_key:
                     lucy_realtime.api_key = api_key
                     logger.info(f"Using API key from frontend: {api_key[:20]}...")
 
-                # Load clothing image bytes
+                # Select model based on mode
+                model_name = "lucy-2.1" if mode == "transform" else "lucy-vton-latest"
+
+                # Load reference image bytes
                 image_bytes = None
                 if clothing_path:
                     full_path = Path(clothing_path)
@@ -407,18 +411,19 @@ async def websocket_vton(websocket: WebSocket):
                     if full_path.exists():
                         image_bytes = full_path.read_bytes()
                     else:
-                        logger.warning(f"Clothing file not found: {full_path}")
+                        logger.warning(f"Reference file not found: {full_path}")
 
                 connected = await lucy_realtime.connect(
                     on_frame=send_processed_frame,
                     prompt=prompt,
                     image_bytes=image_bytes,
+                    model_name=model_name,
                 )
 
                 if connected:
-                    await websocket.send_json({"type": "connected", "message": "Lucy VTON realtime session started"})
+                    await websocket.send_json({"type": "connected", "message": f"Lucy {model_name} session started"})
                 else:
-                    await websocket.send_json({"type": "error", "message": "Failed to connect to Lucy VTON realtime"})
+                    await websocket.send_json({"type": "error", "message": f"Failed to connect to Lucy {model_name}"})
 
             elif msg_type == "frame":
                 # Push OBS frame to WebRTC stream
@@ -596,58 +601,6 @@ async def get_lucy_config():
         "api_key": os.getenv("LUCY_API_KEY", ""),
         "model": "lucy-latest",
     }
-
-
-@app.post("/api/lucy/process")
-async def lucy_process(request: dict):
-    """Process a single frame with Lucy API."""
-    import asyncio
-    import concurrent.futures
-
-    try:
-        frame_b64 = request.get("frame")
-        clothing_path = request.get("clothing")
-        prompt = request.get("prompt", "")
-
-        if not frame_b64 or not clothing_path:
-            return {"error": "Missing frame or clothing"}
-
-        # Decode frame
-        if frame_b64.startswith("data:"):
-            frame_b64 = frame_b64.split(",", 1)[1]
-        frame_bytes = base64.b64decode(frame_b64)
-        frame_img = Image.open(io.BytesIO(frame_bytes))
-
-        # Load reference image (supports both gallery clothing and uploaded person images)
-        if os.path.isabs(clothing_path):
-            clothing_full_path = clothing_path
-        else:
-            clothing_full_path = str(CLOTHING_DIR / clothing_path)
-        if not os.path.exists(clothing_full_path):
-            return {"error": f"Image not found: {clothing_path}"}
-        clothing_img = Image.open(clothing_full_path)
-
-        # Run Lucy API in thread pool
-        from lucy_api import lucy_api
-
-        loop = asyncio.get_event_loop()
-        with concurrent.futures.ThreadPoolExecutor() as pool:
-            result_img = await loop.run_in_executor(
-                pool, lucy_api.transform_image, frame_img, clothing_img, prompt
-            )
-
-        if result_img:
-            # Convert result to base64
-            buffered = io.BytesIO()
-            result_img.save(buffered, format="PNG")
-            result_b64 = base64.b64encode(buffered.getvalue()).decode()
-            return {"image": result_b64}
-        else:
-            return {"error": "Lucy API returned empty result"}
-
-    except Exception as e:
-        logger.error(f"Lucy process error: {e}")
-        return {"error": str(e)}
 
 
 @app.get("/api/clothing/list")

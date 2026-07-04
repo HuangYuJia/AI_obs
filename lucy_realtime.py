@@ -52,14 +52,16 @@ class LucyRealtimeAPI:
         on_frame: Callable[[Image.Image], Union[None, Awaitable[None]]],
         prompt: str = "",
         image_bytes: Optional[bytes] = None,
+        model_name: str = "lucy-vton-latest",
     ) -> bool:
         """
-        Establish WebRTC session with Lucy VTON real-time model.
+        Establish WebRTC session with Lucy real-time model.
 
         Args:
             on_frame: Callback receiving processed PIL Images.
-            prompt: Initial clothing prompt (e.g. "Substitute the current top with a red hoodie").
-            image_bytes: Initial clothing reference image bytes.
+            prompt: Initial prompt (clothing try-on or person transform).
+            image_bytes: Initial reference image bytes (clothing or person).
+            model_name: Model to use - "lucy-vton-latest" or "lucy-2.1".
 
         Returns:
             True if connected successfully.
@@ -76,10 +78,10 @@ class LucyRealtimeAPI:
             self._loop = asyncio.get_running_loop()
             self._on_frame = on_frame
             self._client = DecartClient(api_key=self.api_key)
-            self._model = models.realtime("lucy-vton-latest")
+            self._model = models.realtime(model_name)
 
             logger.info(
-                f"Connecting to Lucy VTON realtime (model={self._model}, "
+                f"Connecting to Lucy realtime (model={model_name}, "
                 f"resolution={self._model.width}x{self._model.height})"
             )
 
@@ -114,11 +116,11 @@ class LucyRealtimeAPI:
 
             self.is_connected = True
             self._frame_count = 0
-            logger.info(f"Lucy VTON realtime session connected (session_id={self._realtime.session_id})")
+            logger.info(f"Lucy realtime session connected (model={model_name}, session_id={self._realtime.session_id})")
 
-            # Set clothing reference after connection
+            # Set reference (clothing or person) after connection
             if prompt or image_bytes:
-                logger.info(f"Setting clothing: prompt={'set' if prompt else 'none'}, image={'set' if image_bytes else 'none'}")
+                logger.info(f"Setting reference: prompt={'set' if prompt else 'none'}, image={'set' if image_bytes else 'none'}")
                 await self._realtime.set(SetInput(
                     prompt=prompt or "try on",
                     image=image_bytes,
