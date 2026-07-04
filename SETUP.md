@@ -1,162 +1,169 @@
 # OBS Virtual Try-On Setup Guide
 
 ## Overview
-A web application that connects to OBS live streaming software, displays the live stream in the browser, and allows drag-and-drop virtual clothing try-on using AI.
+
+A web application that connects to OBS live streaming software and provides real-time AI virtual try-on using Lucy VTON (Decart) via WebRTC.
 
 ## Project Structure
+
 ```
 test60/
 ├── server.py           # FastAPI backend with OBS WebSocket integration
+├── lucy_api.py         # Lucy REST API client (batch mode)
+├── lucy_realtime.py    # Lucy WebRTC real-time client
 ├── requirements.txt    # Python dependencies
+├── .env               # Environment variables
 ├── start.bat          # Windows startup script
 ├── static/
-│   ├── index.html     # Main HTML page (3-panel layout)
+│   ├── index.html     # Main HTML page
 │   ├── style.css      # Dark theme styles
 │   └── app.js         # Frontend JavaScript
-├── uploads/           # Uploaded person images
-├── outputs/           # Generated result images
-└── clothing/          # Uploaded clothing images
+├── uploads/           # Temporary uploads
+├── clothing/          # Clothing image gallery
+└── outputs/           # Generated result images
 ```
 
 ## Quick Start
 
 ### 1. Install Python Dependencies
+
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Configure OBS WebSocket
+### 2. Configure Decart API Key
+
+Create or edit `.env` file:
+
+```env
+LUCY_API_KEY=dct_your_key_here
+```
+
+Get your API key from https://platform.decart.ai
+
+### 3. Configure OBS WebSocket
+
 1. Open OBS Studio
 2. Go to **Tools > WebSocket Server Settings**
 3. Enable WebSocket server
 4. Set port to `4455` (default)
-5. Set a password (optional, leave empty for no auth)
+5. Set password (default used by app: `a123456789`)
 
-### 3. Start the Server
-**Windows:**
+### 4. Start the Server
+
 ```bash
+# Windows
 start.bat
-```
 
-**Or manually:**
-```bash
+# Or manually
 python server.py
 ```
 
-### 4. Open the Web Interface
-Open your browser and go to:
+### 5. Open the Web Interface
+
 ```
 http://localhost:8443
 ```
 
 ## Features
 
-### 3-Panel Layout
-- **Left Panel**: Search gallery for finding costume/outfit images
-- **Center Panel**: OBS live stream preview with AI-generated overlay
-- **Right Panel**: Virtual try-on controls
+### Real-Time Virtual Try-On
+
+Uses Lucy VTON (Decart) via WebRTC for live video processing at 30fps. OBS frames are pushed into the WebRTC stream, processed frames come back in real-time.
 
 ### OBS Integration
-- Connect to OBS via WebSocket
-- Capture live stream frames
-- Display in real-time in the browser
-- Virtual camera output control
 
-### Virtual Try-On
-- Drag & drop clothing images
-- Upload person (full-body) images
-- AI-powered clothing swap
-- Real-time generation with progress feedback
+- Auto-connects to OBS on page load
+- Captures live stream frames at ~15 FPS (throttled to ~3 FPS during AI processing)
+- Virtual camera output support
 
-### UI Features
-- Dark theme matching reference design
-- Live indicator with pulsing animation
-- Timecode display
-- Thumbnail grid management
-- Prompt input with preset tags
-- Mode selection (Try-on, Swap, Generate)
+### Clothing Gallery
 
-## OBS Setup for Virtual Camera
+- Left panel with local image management
+- Upload via drag-and-drop or file picker
+- Click to select, hover to delete
+- Supports mid-session clothing switching
 
-### Option 1: OBS Virtual Camera
-1. In OBS, click **Start Virtual Camera**
-2. In the web UI, click **OBS接続** to connect
-3. The live stream will appear in the center panel
+### Step-Based UI
 
-### Option 2: Browser Source
-1. In OBS, add a **Browser Source**
-2. Set URL to `http://localhost:8443`
-3. Set width/height to match your stream resolution
+- **STEP 1**: Camera confirmation (OBS Virtual Camera)
+- **STEP 2**: Mode selection (lucy-vton-3)
+- **STEP 3**: Start/Stop try-on session
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LUCY_API_KEY` | (required) | Decart API key (`dct_xxxxx`) |
+| `OBS_HOST` | `localhost` | OBS WebSocket host |
+| `OBS_PORT` | `4455` | OBS WebSocket port |
+| `OBS_PASSWORD` | `""` | OBS WebSocket password |
+| `SERVER_PORT` | `8443` | Web server port |
+| `HTTP_PROXY` | (none) | HTTP proxy URL |
+| `HTTPS_PROXY` | (none) | HTTPS proxy URL |
 
 ## API Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/` | Main HTML page |
 | GET | `/api/status` | Get application status |
 | POST | `/api/obs/connect` | Connect to OBS WebSocket |
 | POST | `/api/obs/disconnect` | Disconnect from OBS |
 | GET | `/api/obs/screenshot` | Capture OBS screenshot |
 | POST | `/api/clothing/upload` | Upload clothing image |
-| POST | `/api/person/upload` | Upload person image |
-| POST | `/api/generate` | Generate virtual try-on |
-| POST | `/api/obs/start-virtual-cam` | Start virtual camera |
-| POST | `/api/obs/stop-virtual-cam` | Stop virtual camera |
-| WS | `/ws` | WebSocket for real-time updates |
+| GET | `/api/clothing/list` | List clothing images |
+| DELETE | `/api/clothing/{filename}` | Delete clothing image |
+| GET | `/api/lucy/config` | Get Lucy API config |
+| POST | `/api/lucy/process` | Single-frame VTON (REST) |
+| GET | `/api/stream` | SSE streaming endpoint |
+| WS | `/ws` | WebSocket status updates |
+| WS | `/ws/vton` | WebSocket real-time VTON stream |
 
-## Configuration
+## WebSocket Protocol (`/ws/vton`)
 
-### Environment Variables
-```bash
-OBS_HOST=localhost      # OBS WebSocket host
-OBS_PORT=4455          # OBS WebSocket port
-OBS_PASSWORD=          # OBS WebSocket password (empty = no auth)
-SERVER_PORT=8443       # Web server port
-```
+### Client -> Server
 
-### Custom VTON Model
-To use a real VTON model (e.g., IDM-VTON, OOTDiffusion):
+| Type | Description | Payload |
+|------|-------------|---------|
+| `start` | Begin session | `clothing`, `prompt`, `api_key` |
+| `frame` | Push OBS frame | `frame` (base64 JPEG) |
+| `update` | Change clothing | `clothing` (path) |
+| `stop` | End session | (none) |
 
-1. Install the model dependencies:
-```bash
-pip install torch torchvision diffusers transformers
-```
+### Server -> Client
 
-2. Edit `server.py`, in the `VTONProcessor` class:
-```python
-def load_model(self, model_name="lucy-vton-3"):
-    from diffusers import StableDiffusionPipeline
-    self.model = StableDiffusionPipeline.from_pretrained("idm-vton/lucy-vton-3")
-    self.model.to(self.device)
-```
-
-3. Update the `process()` method with actual inference code.
+| Type | Description |
+|------|-------------|
+| `connected` | Session started |
+| `frame` | Processed frame (base64) |
+| `error` | Error message |
+| `stopped` | Session ended |
 
 ## Troubleshooting
 
 ### OBS Connection Failed
+
 - Make sure OBS is running
 - Check WebSocket is enabled in OBS settings
 - Verify the port matches (default: 4455)
-- Check firewall settings
+- Check password matches
 
-### No Video Stream
-- Ensure OBS Virtual Camera is started
-- Check the browser console for errors
-- Try refreshing the page
+### Real-Time Try-On Not Working
 
-### Generation Errors
-- Ensure both person and clothing images are uploaded
-- Check the server logs for detailed error messages
-- Verify the VTON model is properly loaded
+- Verify `LUCY_API_KEY` is set in `.env`
+- Check network can reach Decart API
+- Ensure clothing image is selected
+- Confirm OBS is connected (LIVE indicator is pink)
+
+### High Latency
+
+- Check network quality
+- Verify proxy settings if using proxy
+- Consider lowering OBS output resolution
 
 ## Browser Compatibility
+
 - Chrome 90+
 - Firefox 88+
 - Edge 90+
 - Safari 14+
-
-## Notes
-- The left panel (search gallery) is for demonstration only and does not connect to external search APIs
-- The AI virtual try-on uses a placeholder implementation by default; replace with actual VTON model for production use
-- For best results, use high-resolution full-body person images

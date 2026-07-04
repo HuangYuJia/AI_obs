@@ -111,7 +111,7 @@ html, body {
     background: rgba(0, 0, 0, 0.6);
     border: none;
     border-radius: 20px;
-    z-index: 10;
+    z-index: 20;
     transition: all 0.3s;
 }
 
@@ -237,6 +237,7 @@ html, body {
     color: var(--accent-primary);
     font-size: 14px;
 }
+
 
 .panel__actions {
     display: flex;
@@ -409,7 +410,7 @@ html, body {
     flex: 1;
     display: flex;
     flex-direction: column;
-    background: var(--bg-primary);
+    background: #000;
 }
 
 /* Thumbnail Strip */
@@ -515,10 +516,11 @@ html, body {
 .main-preview__video {
     flex: 1;
     position: relative;
-    background: var(--bg-tertiary);
+    background: #000;
     border-radius: 10px;
     overflow: hidden;
     min-height: 0;
+    border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .main-preview__video video {
@@ -601,34 +603,27 @@ html, body {
 
 /* Bottom Preview (center panel) */
 .bottom-preview {
-    padding: 8px 12px;
-    background: var(--bg-secondary);
-    border-top: 1px solid var(--border-color);
+    display: flex;
+    justify-content: flex-end;
+    padding: 0;
+    background: transparent;
+    border: none;
+    flex: 0 0 auto;
 }
 
 .bottom-preview__header {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--text-primary);
-    margin-bottom: 6px;
-}
-
-.bottom-preview__header i {
-    color: var(--accent-primary);
-    font-size: 12px;
+    display: none;
 }
 
 .bottom-preview__video {
-    width: 200px;
-    height: 112px;
+    width: 240px;
+    height: 135px;
     background: var(--bg-tertiary);
-    border-radius: 6px;
+    border-radius: 8px;
     overflow: hidden;
     position: relative;
     border: 1px solid var(--border-color);
+    align-self: flex-end;
 }
 
 .bottom-preview__video img {

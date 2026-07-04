@@ -618,10 +618,13 @@ async def lucy_process(request: dict):
         frame_bytes = base64.b64decode(frame_b64)
         frame_img = Image.open(io.BytesIO(frame_bytes))
 
-        # Load clothing
-        clothing_full_path = str(CLOTHING_DIR / clothing_path)
+        # Load reference image (supports both gallery clothing and uploaded person images)
+        if os.path.isabs(clothing_path):
+            clothing_full_path = clothing_path
+        else:
+            clothing_full_path = str(CLOTHING_DIR / clothing_path)
         if not os.path.exists(clothing_full_path):
-            return {"error": f"Clothing not found: {clothing_path}"}
+            return {"error": f"Image not found: {clothing_path}"}
         clothing_img = Image.open(clothing_full_path)
 
         # Run Lucy API in thread pool

@@ -55,10 +55,6 @@
 
                 <!-- Original Feed Preview -->
                 <div class="bottom-preview">
-                    <div class="bottom-preview__header">
-                        <i class="fas fa-image"></i>
-                        <span>原始画面</span>
-                    </div>
                     <div class="bottom-preview__video">
                         <img id="bottomPreviewImg" src="" alt="原始画面" style="display:none;">
                         <div class="bottom-preview__placeholder">
@@ -119,23 +115,26 @@
             <div class="section">
                 <div class="section__header">
                     <span class="step-badge">STEP 2</span>
-                    <span>模式</span>
+                    <span>模式选择</span>
                 </div>
                 <div class="mode-select-group">
-                    <label class="camera-label">选择转换模式</label>
+                    <label class="camera-label" id="modeLabel">变换模式</label>
                     <div class="camera-select-wrapper">
                         <select id="modeSelect" class="camera-select">
                             <option value="vton" selected>服装试穿/换装 (lucy-vton-3)</option>
+                            <option value="transform">美少女变换 (lucy-2.1)</option>
                         </select>
                         <i class="fas fa-chevron-down"></i>
                     </div>
-                    <small class="camera-hint">服装画像=想要试穿的衣服，能拍摄到人物全身的相机位置</small>
-                    <small class="camera-hint">会保持稳定的服装图像（想要试穿的衣服·拖放）</small>
+                    <small class="camera-hint mode-hint-vton">服装画像=想试穿的衣服。拍摄人物全身的相机位置稳定。</small>
+                    <small class="camera-hint mode-hint-vton">服装的图像(想要试穿的服装·拖放)</small>
+                    <small class="camera-hint mode-hint-transform" style="display:none;">参照图像=理想的容貌,在提示词中指定氛围。</small>
+                    <small class="camera-hint mode-hint-transform" style="display:none;">参照画像(任意)</small>
                 </div>
             </div>
 
             <!-- Clothing Section -->
-            <div class="section">
+            <div class="section" id="clothingSection">
                 <div class="drag-drop-area" id="clothingDropArea">
                     <div class="drag-drop-area__content" id="clothingDropContent">
                         <i class="fas fa-cloud-upload-alt"></i>
@@ -146,6 +145,23 @@
                     <div class="drag-drop-area__preview" id="clothingPreview" style="display:none;">
                         <img id="clothingPreviewImg" src="" alt="Clothing">
                         <button class="btn btn--tiny btn--danger" id="btnClearClothing" title="清除图片">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Reference Image Section (transform mode) -->
+            <div class="section" id="referenceSection" style="display:none;">
+                <div class="drag-drop-area" id="referenceDropArea">
+                    <div class="drag-drop-area__content" id="referenceDropContent">
+                        <i class="fas fa-cloud-upload-alt"></i>
+                        <p>将图像拖放到此处或点击选择</p>
+                        <input type="file" id="referenceFileInput" accept="image/*" style="display:none;">
+                    </div>
+                    <div class="drag-drop-area__preview" id="referencePreview" style="display:none;">
+                        <img id="referencePreviewImg" src="" alt="Reference">
+                        <button class="btn btn--tiny btn--danger" id="btnClearReference" title="画像をクリア">
                             <i class="fas fa-times"></i>
                         </button>
                     </div>
@@ -167,6 +183,7 @@
                     <button class="prompt-tag" data-prompt="写实美女">写实美女</button>
                     <button class="prompt-tag" data-prompt="写真">写真</button>
                 </div>
+                <small class="camera-hint" style="margin-top:8px;display:block;">可同时使用图像+提示词，用图像指定外貌，用提示词指定氛围就会稳定下来。</small>
             </div>
 
             <!-- Action Buttons -->

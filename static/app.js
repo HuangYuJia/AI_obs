@@ -10,8 +10,9 @@ const state = {
     obsConnected: false,
     isLive: false,
     isGenerating: false,
-    currentMode: 'tryon',
+    currentMode: 'vton',
     currentClothing: null,
+    currentReferenceImage: null,
     ws: null,
     vtonWs: null,  // Lucy VTON real-time WebSocket
     obsPassword: localStorage.getItem('obsPassword') || 'a123456789',
@@ -48,12 +49,25 @@ const elements = {
     bottomPreviewImg: $('#bottomPreviewImg'),
 
     // Right panel - clothing
+    clothingSection: $('#clothingSection'),
     clothingDropArea: $('#clothingDropArea'),
     clothingDropContent: $('#clothingDropContent'),
     clothingPreview: $('#clothingPreview'),
     clothingPreviewImg: $('#clothingPreviewImg'),
     clothingFileInput: $('#clothingFileInput'),
     btnClearClothing: $('#btnClearClothing'),
+
+    // Right panel - reference image (transform mode)
+    referenceSection: $('#referenceSection'),
+    referenceDropArea: $('#referenceDropArea'),
+    referenceDropContent: $('#referenceDropContent'),
+    referencePreview: $('#referencePreview'),
+    referencePreviewImg: $('#referencePreviewImg'),
+    referenceFileInput: $('#referenceFileInput'),
+    btnClearReference: $('#btnClearReference'),
+
+    // Mode selector
+    modeSelect: $('#modeSelect'),
 
     // Right panel - controls
     promptInput: $('#promptInput'),
@@ -398,6 +412,7 @@ let tryOnProcessing = false;
 let isSwitchingState = false;
 let lastProcessedClothing = null;
 let vtonWsConnected = false;
+let isTransformProcessing = false;
 
 function connectVTONWebSocket() {
     // Prevent duplicate connections
@@ -534,6 +549,80 @@ function showGeneratedImage(base64Image) {
 }
 
 // ──────────────────────────────────────────────
+// Transform Mode (lucy-2.1 REST API)
+// ──────────────────────────────────────────────
+async function startTransformLoop() {
+    if (!isTransformProcessing) return;
+
+    if (elements.aiBadge) {
+        elements.aiBadge.textContent = 'AI 人物变换中...';
+        elements.aiBadge.style.display = 'block';
+    }
+
+    while (isTransformProcessing) {
+        try {
+            // Capture current OBS frame
+            const canvas = elements.obsCanvas;
+            if (canvas.width === 0 || canvas.height === 0) {
+                await new Promise(r => setTimeout(r, 1000));
+                continue;
+            }
+
+            const frameBase64 = canvas.toDataURL('image/jpeg', 0.7).split(',')[1];
+
+            // Show processing state
+            if (elements.aiBadge) {
+                elements.aiBadge.textContent = 'AI 处理中...';
+            }
+
+            const prompt = elements.promptInput ? elements.promptInput.value.trim() : '';
+            const response = await fetch('/api/lucy/process', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    frame: frameBase64,
+                    clothing: state.currentReferenceImage,
+                    prompt: prompt || 'Transform the person to match the reference image',
+                }),
+            });
+
+            if (!isTransformProcessing) break;
+
+            if (response.ok) {
+                const data = await response.json();
+                if (data.image) {
+                    showGeneratedImage(data.image);
+                    if (elements.aiBadge) {
+                        elements.aiBadge.textContent = 'AI 人物变换';
+                    }
+                } else if (data.error) {
+                    console.error('[Transform] Error:', data.error);
+                    if (elements.aiBadge) {
+                        elements.aiBadge.textContent = 'AI 处理错误';
+                    }
+                }
+            } else {
+                console.error('[Transform] HTTP error:', response.status);
+                if (elements.aiBadge) {
+                    elements.aiBadge.textContent = 'AI 请求错误';
+                }
+            }
+        } catch (e) {
+            if (!isTransformProcessing) break;
+            console.error('[Transform] Error:', e);
+            if (elements.aiBadge) {
+                elements.aiBadge.textContent = 'AI 连接错误';
+            }
+        }
+
+        // Wait before next frame (avoid overloading the API)
+        if (isTransformProcessing) {
+            await new Promise(r => setTimeout(r, 2000));
+        }
+    }
+}
+
+// ──────────────────────────────────────────────
 // Clothing Drag & Drop
 // ──────────────────────────────────────────────
 function initClothingDragDrop() {
@@ -641,6 +730,98 @@ function clearClothing() {
 }
 
 // ──────────────────────────────────────────────
+// Reference Image Drag & Drop (Transform Mode)
+// ──────────────────────────────────────────────
+function initReferenceDragDrop() {
+    const area = elements.referenceDropArea;
+    const fileInput = elements.referenceFileInput;
+    if (!area || !fileInput) return;
+
+    area.addEventListener('click', (e) => {
+        if (e.target.closest('.btn--danger')) return;
+        fileInput.click();
+    });
+
+    fileInput.addEventListener('change', (e) => {
+        if (e.target.files.length > 0) {
+            handleReferenceFile(e.target.files[0]);
+        }
+    });
+
+    area.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        area.classList.add('dragover');
+    });
+
+    area.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        area.classList.remove('dragover');
+    });
+
+    area.addEventListener('drop', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        area.classList.remove('dragover');
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+            handleReferenceFile(files[0]);
+        }
+    });
+
+    elements.btnClearReference.addEventListener('click', (e) => {
+        e.stopPropagation();
+        clearReference();
+    });
+}
+
+async function handleReferenceFile(file) {
+    if (!file.type.startsWith('image/')) {
+        showToast('请选择图片文件', 'error');
+        return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        elements.referencePreviewImg.src = e.target.result;
+        elements.referenceDropContent.style.display = 'none';
+        elements.referencePreview.style.display = 'flex';
+    };
+    reader.readAsDataURL(file);
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+        const response = await fetch('/api/person/upload', {
+            method: 'POST',
+            body: formData,
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            state.currentReferenceImage = data.path;
+            showToast('参照画像をアップロードしました', 'success');
+            updateStartButton();
+        } else {
+            showToast('上传失败', 'error');
+        }
+    } catch (e) {
+        showToast('上传错误: ' + e.message, 'error');
+    }
+}
+
+function clearReference() {
+    state.currentReferenceImage = null;
+    elements.referenceDropContent.style.display = '';
+    elements.referencePreview.style.display = 'none';
+    elements.referencePreviewImg.src = '';
+    elements.referenceFileInput.value = '';
+    updateStartButton();
+}
+
+// ──────────────────────────────────────────────
 // Search Image Drag to Clothing
 // ──────────────────────────────────────────────
 
@@ -657,11 +838,37 @@ async function handleClothingUrl(url) {
 }
 
 // ──────────────────────────────────────────────
-// Mode Selection (single mode now)
+// Mode Selection
 // ──────────────────────────────────────────────
 function initModeSelection() {
-    // Only one mode now, no need for selection logic
-    state.currentMode = 'tryon';
+    const select = elements.modeSelect;
+    if (!select) return;
+
+    select.addEventListener('change', () => {
+        state.currentMode = select.value;
+        switchMode(state.currentMode);
+    });
+
+    state.currentMode = select.value || 'vton';
+}
+
+function switchMode(mode) {
+    const isVton = mode === 'vton';
+    const isTransform = mode === 'transform';
+
+    // Toggle sections
+    if (elements.clothingSection) elements.clothingSection.style.display = isVton ? '' : 'none';
+    if (elements.referenceSection) elements.referenceSection.style.display = isTransform ? '' : 'none';
+
+    // Toggle hints
+    $$('.mode-hint-vton').forEach(el => el.style.display = isVton ? '' : 'none');
+    $$('.mode-hint-transform').forEach(el => el.style.display = isTransform ? '' : 'none');
+
+    // Update label
+    const modeLabel = document.getElementById('modeLabel');
+    if (modeLabel) modeLabel.textContent = '变换模式';
+
+    updateStartButton();
 }
 
 // ──────────────────────────────────────────────
@@ -713,10 +920,6 @@ function createImageCard(src, title, source, isLocal = false) {
 
     div.innerHTML = `
         <img src="${src}" alt="${title}" loading="lazy">
-        <div class="image-card__info">
-            <span class="image-card__title">${title}</span>
-            <span class="image-card__source">${source}</span>
-        </div>
         ${isLocal ? '<button class="image-card__delete" title="删除"><i class="fas fa-times"></i></button>' : ''}
     `;
 
@@ -838,70 +1041,90 @@ function updateSteps() {
 }
 
 function updateStartButton() {
-    // Both clothing image and OBS connection are required
-    const canStart = state.currentClothing && state.obsConnected;
-    elements.btnStart.disabled = !canStart;
+    const isVton = state.currentMode === 'vton';
+    const isTransform = state.currentMode === 'transform';
 
-    // Update steps
+    let canStart = false;
+    if (isVton) {
+        canStart = state.currentClothing && state.obsConnected;
+    } else if (isTransform) {
+        canStart = state.currentReferenceImage && state.obsConnected;
+    }
+
+    elements.btnStart.disabled = !canStart;
     updateSteps();
 
+    // Update button text
+    const startLabel = elements.btnStart.querySelector('span') || elements.btnStart;
+    if (isTransform) {
+        elements.btnStart.innerHTML = '<i class="fas fa-play"></i> 连接并开始';
+    } else {
+        elements.btnStart.innerHTML = '<i class="fas fa-play"></i> 开始换装';
+    }
+
     // Update tooltip
-    if (!state.currentClothing) {
+    if (isVton && !state.currentClothing) {
         elements.btnStart.title = '请先上传服装图片';
+    } else if (isTransform && !state.currentReferenceImage) {
+        elements.btnStart.title = '请先上传参照画像';
     } else if (!state.obsConnected) {
         elements.btnStart.title = '请先连接OBS';
     } else {
-        elements.btnStart.title = '开始实时换装';
+        elements.btnStart.title = isTransform ? '开始人物变换' : '开始实时换装';
     }
 }
 
 async function startGeneration() {
-    // Prevent rapid clicking
     if (isSwitchingState) return;
 
-    if (!state.currentClothing) {
+    const isVton = state.currentMode === 'vton';
+    const isTransform = state.currentMode === 'transform';
+
+    if (isVton && !state.currentClothing) {
         showToast('请先上传服装图片', 'error');
         return;
     }
-
+    if (isTransform && !state.currentReferenceImage) {
+        showToast('请先上传参照画像', 'error');
+        return;
+    }
     if (!state.obsConnected) {
         showToast('请先连接OBS', 'error');
         return;
     }
 
-    // Lock state
     isSwitchingState = true;
     elements.btnStart.disabled = true;
     elements.btnStop.disabled = true;
 
-    // Show "connecting" state
     if (elements.aiBadge) {
         elements.aiBadge.textContent = 'AI 连接中...';
         elements.aiBadge.style.display = 'block';
     }
-    // Hide OBS canvas during connection to avoid green screen flash
-    elements.obsCanvas.style.display = 'none';
     elements.generatedOverlay.style.display = 'none';
     elements.previewPlaceholder.style.display = 'flex';
     elements.previewPlaceholder.innerHTML = `
         <i class="fas fa-spinner fa-spin"></i>
-        <p>AI 换装连接中...</p>
+        <p>${isTransform ? 'AI 人物变换连接中...' : 'AI 换装连接中...'}</p>
     `;
 
-    // Enable real-time try-on mode
-    isRealTimeTryOn = true;
     state.isGenerating = true;
-    lastProcessedClothing = null;  // Reset to trigger new generation
-    tryOnProcessing = false;  // Reset processing flag
     elements.btnStart.style.display = 'none';
     elements.btnStop.style.display = '';
     updateSteps();
-    showToast('实时换装已开启', 'success');
 
-    // Connect VTON WebSocket for real-time streaming
-    connectVTONWebSocket();
+    if (isVton) {
+        isRealTimeTryOn = true;
+        lastProcessedClothing = null;
+        tryOnProcessing = false;
+        showToast('实时换装已开启', 'success');
+        connectVTONWebSocket();
+    } else if (isTransform) {
+        isTransformProcessing = true;
+        showToast('人物变换已开启', 'success');
+        startTransformLoop();
+    }
 
-    // Unlock after a short delay
     setTimeout(() => {
         isSwitchingState = false;
         elements.btnStop.disabled = false;
@@ -909,29 +1132,26 @@ async function startGeneration() {
 }
 
 async function stopGeneration() {
-    // Prevent rapid clicking
     if (isSwitchingState) return;
 
-    // Lock state
     isSwitchingState = true;
     elements.btnStart.disabled = true;
     elements.btnStop.disabled = true;
 
-    // Stop real-time try-on mode
+    // Stop both modes
     isRealTimeTryOn = false;
+    isTransformProcessing = false;
     state.isGenerating = false;
     tryOnProcessing = false;
-    lastProcessedClothing = null;  // Reset so next start will trigger new generation
+    lastProcessedClothing = null;
     lastClothingPath = null;
 
-    // Disconnect VTON WebSocket
     disconnectVTONWebSocket();
 
     elements.btnStart.style.display = '';
     elements.btnStop.style.display = 'none';
     updateSteps();
 
-    // Hide AI overlay and badge - CLEAR EVERYTHING
     if (elements.generatedOverlay) {
         elements.generatedOverlay.style.display = 'none';
         elements.generatedOverlay.src = '';
@@ -941,18 +1161,15 @@ async function stopGeneration() {
         elements.aiBadge.textContent = '';
     }
 
-    // Show canvas again for OBS feed
     elements.obsCanvas.style.display = 'block';
     elements.previewPlaceholder.style.display = 'none';
 
-    // Show canvas again for OBS feed
     if (isOBSRendering) {
         elements.obsCanvas.style.display = 'block';
     }
 
-    showToast('实时换装已停止', 'info');
+    showToast(state.currentMode === 'transform' ? '人物变换已停止' : '实时换装已停止', 'info');
 
-    // Unlock after a short delay
     setTimeout(() => {
         isSwitchingState = false;
         updateStartButton();
@@ -1006,6 +1223,7 @@ function init() {
     // Initialize all modules
     initEventListeners();
     initClothingDragDrop();
+    initReferenceDragDrop();
     initImageGallery();
     initModeSelection();
     initPromptTags();
