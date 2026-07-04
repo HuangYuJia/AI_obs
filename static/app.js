@@ -10,7 +10,7 @@ const state = {
     obsConnected: false,
     isLive: false,
     isGenerating: false,
-    currentMode: 'vton',
+    currentMode: 'transform',
     currentClothing: null,
     currentReferenceImage: null,
     ws: null,
@@ -373,6 +373,21 @@ function stopOBSStream() {
     }
 }
 
+function removeGreenScreen(canvas, ctx) {
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const data = imageData.data;
+    for (let i = 0; i < data.length; i += 4) {
+        const r = data[i], g = data[i + 1], b = data[i + 2];
+        // Detect green pixels (green channel dominant)
+        if (g > 60 && g > r + 15 && g > b + 15) {
+            data[i] = 0;     // R
+            data[i + 1] = 0; // G
+            data[i + 2] = 0; // B
+        }
+    }
+    ctx.putImageData(imageData, 0, 0);
+}
+
 function renderFrame(base64Image) {
     // Don't render if OBS is disconnected
     if (!isOBSRendering) return;
@@ -397,10 +412,16 @@ function renderFrame(base64Image) {
         canvas.height = img.height;
         ctx.drawImage(img, 0, 0);
 
+        // Remove green screen background before sending to AI
+        if (isRealTimeTryOn) {
+            removeGreenScreen(canvas, ctx);
+        }
+
         // If real-time processing is active, send frame for AI processing
         const hasReference = state.currentMode === 'transform' ? state.currentReferenceImage : state.currentClothing;
         if (isRealTimeTryOn && hasReference) {
-            applyRealTimeTryOn(base64Image);
+            const cleanedBase64 = canvas.toDataURL('image/jpeg', 0.7).split(',')[1];
+            applyRealTimeTryOn(cleanedBase64);
         }
     };
     img.src = `data:image/jpeg;base64,${base64Image}`;
@@ -413,6 +434,7 @@ let tryOnProcessing = false;
 let isSwitchingState = false;
 let lastProcessedClothing = null;
 let vtonWsConnected = false;
+let vtonFirstFrameShown = false; // track if first valid frame was shown
 
 function connectVTONWebSocket() {
     // Prevent duplicate connections
@@ -427,6 +449,7 @@ function connectVTONWebSocket() {
 
     state.vtonWs.onopen = () => {
         console.log('[VTON] WebSocket connected');
+        vtonFirstFrameShown = false;
         const userPrompt = elements.promptInput ? elements.promptInput.value.trim() : '';
         const prompt = userPrompt || 'try on';
         const apiKey = document.getElementById('decartApiKey') ? document.getElementById('decartApiKey').value : '';
@@ -474,14 +497,17 @@ function handleVTONMessage(data) {
         case 'frame':
             // Received processed frame from Lucy VTON
             if (data.image) {
-                // Restore canvas on first frame
-                if (elements.previewPlaceholder.style.display !== 'none') {
-                    elements.previewPlaceholder.style.display = 'none';
-                    elements.obsCanvas.style.display = 'block';
+                // Hide placeholder on first frame
+                if (!vtonFirstFrameShown) {
+                    vtonFirstFrameShown = true;
+                    if (elements.previewPlaceholder.style.display !== 'none') {
+                        elements.previewPlaceholder.style.display = 'none';
+                        elements.obsCanvas.style.display = 'block';
+                    }
                 }
                 elements.generatedOverlay.src = `data:image/jpeg;base64,${data.image}`;
                 elements.generatedOverlay.style.display = 'block';
-                elements.aiBadge.textContent = 'AI 实时换装中';
+                elements.aiBadge.textContent = 'AI 实时处理中';
                 elements.aiBadge.style.display = 'block';
                 tryOnProcessing = false;
             }
@@ -498,6 +524,22 @@ function handleVTONMessage(data) {
             vtonWsConnected = false;
             elements.aiBadge.textContent = 'AI 错误: ' + (data.message || '');
             elements.aiBadge.style.display = 'block';
+            break;
+        case 'state':
+            console.log('[VTON] State:', data.state);
+            if (data.state === 'ready') {
+                elements.aiBadge.textContent = 'AI 实时处理中';
+                elements.aiBadge.style.display = 'block';
+            } else if (data.state === 'connecting') {
+                elements.aiBadge.textContent = 'AI WebRTC 连接中...';
+                elements.aiBadge.style.display = 'block';
+            } else if (data.state === 'disconnected' || data.state === 'track_ended') {
+                elements.aiBadge.textContent = 'AI 连接断开';
+                elements.aiBadge.style.display = 'block';
+            } else if (data.state === 'error') {
+                elements.aiBadge.textContent = 'AI 连接错误';
+                elements.aiBadge.style.display = 'block';
+            }
             break;
     }
 }
@@ -518,7 +560,8 @@ function disconnectVTONWebSocket() {
 }
 
 async function applyRealTimeTryOn(base64Frame) {
-    if (!state.currentClothing) {
+    const hasRef = state.currentMode === 'transform' ? state.currentReferenceImage : state.currentClothing;
+    if (!hasRef) {
         return;
     }
 
@@ -785,7 +828,8 @@ function initModeSelection() {
         switchMode(state.currentMode);
     });
 
-    state.currentMode = select.value || 'vton';
+    state.currentMode = select.value || 'transform';
+    switchMode(state.currentMode);
 }
 
 function switchMode(mode) {
@@ -1129,6 +1173,17 @@ function initEventListeners() {
     // Start/Stop buttons
     elements.btnStart.addEventListener('click', startGeneration);
     elements.btnStop.addEventListener('click', stopGeneration);
+
+    // API key show/hide toggle
+    const btnToggleApiKey = document.getElementById('btnToggleApiKey');
+    const apiKeyInput = document.getElementById('decartApiKey');
+    if (btnToggleApiKey && apiKeyInput) {
+        btnToggleApiKey.addEventListener('click', () => {
+            const isPassword = apiKeyInput.type === 'password';
+            apiKeyInput.type = isPassword ? 'text' : 'password';
+            btnToggleApiKey.querySelector('i').className = isPassword ? 'fas fa-eye-slash' : 'fas fa-eye';
+        });
+    }
 }
 
 // ──────────────────────────────────────────────

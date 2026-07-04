@@ -691,9 +691,15 @@ html, body {
     gap: 6px;
 }
 
+.api-key-input-wrapper {
+    display: flex;
+    align-items: center;
+    position: relative;
+}
+
 .api-key-input {
     width: 100%;
-    padding: 8px 12px;
+    padding: 8px 36px 8px 12px;
     background: var(--bg-primary);
     border: 1px solid var(--border-color);
     border-radius: 6px;
@@ -701,6 +707,22 @@ html, body {
     font-size: 12px;
     outline: none;
     transition: border-color 0.2s;
+}
+
+.api-key-toggle {
+    position: absolute;
+    right: 8px;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px;
+    font-size: 12px;
+    transition: color 0.2s;
+}
+
+.api-key-toggle:hover {
+    color: var(--text-primary);
 }
 
 .api-key-input:focus {

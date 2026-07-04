@@ -84,7 +84,12 @@
                     <span>Decart API 密钥</span>
                 </div>
                 <div class="api-key-input-group">
-                    <input type="password" id="decartApiKey" class="api-key-input" placeholder="输入 Decart API Key" value="dct_dttt_xBOUFnMmCxQCtrfDXdaiivZsHGCLVPDFWrunSfcDogeHagegXaIMpGLOJuHzfBAj">
+                    <div class="api-key-input-wrapper">
+                        <input type="password" id="decartApiKey" class="api-key-input" placeholder="输入 Decart API Key" value="dct_test_RvJSUTQgRZJEVNSQTmpQYLzzGUZqjdGXRhTLDOHYJjeDAriNJLmeFiFgEbsLRrEo">
+                        <button type="button" class="api-key-toggle" id="btnToggleApiKey" title="显示/隐藏密钥">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                    </div>
                     <small class="api-key-hint">保存到终端。获取：<a href="https://platform.decart.ai/" target="_blank">https://platform.decart.ai/</a></small>
                 </div>
             </div>
@@ -121,8 +126,8 @@
                     <label class="camera-label" id="modeLabel">变换模式</label>
                     <div class="camera-select-wrapper">
                         <select id="modeSelect" class="camera-select">
-                            <option value="vton" selected>服装试穿/换装 (lucy-vton-3)</option>
-                            <option value="transform">美少女变换 (lucy-2.1)</option>
+                            <option value="vton">服装试穿/换装 (lucy-vton-3)</option>
+                            <option value="transform" selected>美少女变换 (lucy-2.1)</option>
                         </select>
                         <i class="fas fa-chevron-down"></i>
                     </div>

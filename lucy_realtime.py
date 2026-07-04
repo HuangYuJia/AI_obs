@@ -41,7 +41,9 @@ class LucyRealtimeAPI:
         self._model = None            # model descriptor
         self._loop = None             # asyncio event loop
         self._on_frame = None         # user callback for processed frames
+        self._on_state = None         # state change callback
         self.is_connected = False
+        self.remote_ready = False     # remote track is receiving
         self._frame_count = 0         # debug: track frames pushed
 
     def is_configured(self) -> bool:
@@ -53,6 +55,7 @@ class LucyRealtimeAPI:
         prompt: str = "",
         image_bytes: Optional[bytes] = None,
         model_name: str = "lucy-vton-latest",
+        on_state: Optional[Callable[[str], None]] = None,
     ) -> bool:
         """
         Establish WebRTC session with Lucy real-time model.
@@ -62,6 +65,7 @@ class LucyRealtimeAPI:
             prompt: Initial prompt (clothing try-on or person transform).
             image_bytes: Initial reference image bytes (clothing or person).
             model_name: Model to use - "lucy-vton-latest" or "lucy-2.1".
+            on_state: Callback for state changes ("connecting", "ready", "error").
 
         Returns:
             True if connected successfully.
@@ -77,6 +81,8 @@ class LucyRealtimeAPI:
         try:
             self._loop = asyncio.get_running_loop()
             self._on_frame = on_frame
+            self._on_state = on_state
+            self.remote_ready = False
             self._client = DecartClient(api_key=self.api_key)
             self._model = models.realtime(model_name)
 
@@ -84,6 +90,8 @@ class LucyRealtimeAPI:
                 f"Connecting to Lucy realtime (model={model_name}, "
                 f"resolution={self._model.width}x{self._model.height})"
             )
+            if self._on_state:
+                self._on_state("connecting")
 
             # Create video source for pushing frames
             self._source = rtc.VideoSource(self._model.width, self._model.height)
@@ -91,7 +99,10 @@ class LucyRealtimeAPI:
 
             # Handle transformed output frames from Decart
             def on_remote_stream(track: rtc.RemoteVideoTrack):
-                logger.info("on_remote_stream callback fired - receiving processed track")
+                logger.info("on_remote_stream callback fired - remote track ready")
+                self.remote_ready = True
+                if self._on_state:
+                    self._on_state("ready")
                 asyncio.create_task(self._consume_remote_track(track))
 
             # Connect via WebRTC (without initial_state, set clothing after)
@@ -108,10 +119,16 @@ class LucyRealtimeAPI:
             # Add connection state listener for debugging
             def on_connection_change(state):
                 logger.info(f"WebRTC connection state: {state}")
+                if state in ("disconnected", "failed", "closed"):
+                    self.remote_ready = False
+                    if self._on_state:
+                        self._on_state("disconnected")
             self._realtime.on("connection_change", on_connection_change)
 
             def on_error(error):
                 logger.error(f"WebRTC error: {error}")
+                if self._on_state:
+                    self._on_state("error")
             self._realtime.on("error", on_error)
 
             self.is_connected = True
@@ -170,6 +187,10 @@ class LucyRealtimeAPI:
                 logger.error(f"Error consuming remote track: {e}")
                 import traceback
                 traceback.print_exc()
+        finally:
+            self.remote_ready = False
+            if self._on_state and self.is_connected:
+                self._on_state("track_ended")
 
     @staticmethod
     def _frame_to_pil(frame) -> Optional[Image.Image]:
@@ -193,14 +214,8 @@ class LucyRealtimeAPI:
             return None
 
     async def push_frame(self, image: Image.Image):
-        """
-        Push an OBS frame into the WebRTC stream for processing.
-
-        Args:
-            image: PIL Image from OBS screenshot.
-        """
-        if not self.is_connected or not self._source:
-            logger.warning("Cannot push frame: not connected")
+        """Push an OBS frame into the WebRTC stream for processing."""
+        if not self.is_connected or not self.remote_ready or not self._source:
             return
 
         try:
@@ -265,6 +280,7 @@ class LucyRealtimeAPI:
     async def disconnect(self):
         """Clean up WebRTC session."""
         self.is_connected = False
+        self.remote_ready = False
 
         if self._realtime:
             try:

@@ -413,11 +413,18 @@ async def websocket_vton(websocket: WebSocket):
                     else:
                         logger.warning(f"Reference file not found: {full_path}")
 
+                async def on_state(state: str):
+                    try:
+                        await websocket.send_json({"type": "state", "state": state})
+                    except Exception:
+                        pass
+
                 connected = await lucy_realtime.connect(
                     on_frame=send_processed_frame,
                     prompt=prompt,
                     image_bytes=image_bytes,
                     model_name=model_name,
+                    on_state=on_state,
                 )
 
                 if connected:
